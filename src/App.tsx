@@ -33,6 +33,7 @@ const App: React.FC = () => {
   // Agent States
   const [translationAgent, setTranslationAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [clinicalAgent, setClinicalAgent] = useState<AgentState>({ status: 'idle', data: null });
+  const [prescriptionAgent, setPrescriptionAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [sttStatus, setSttStatus] = useState<'idle' | 'recording' | 'processing'>('idle');
   const [isProcessing, setIsProcessing] = useState(false);
   const [volume, setVolume] = useState(0);
@@ -194,9 +195,11 @@ const App: React.FC = () => {
       return;
     }
 
+    const ENV_HF_KEY = import.meta.env.VITE_HF_API_KEY || '';
     setIsProcessing(true);
     setTranslationAgent({ status: 'processing', data: null });
     setClinicalAgent({ status: 'idle', data: null });
+    setPrescriptionAgent({ status: 'idle', data: null });
 
     try {
       // 1. Translation Layer (Sarvam AI)
@@ -290,7 +293,6 @@ const App: React.FC = () => {
       }
 
       if (!success) {
-        const ENV_HF_KEY = import.meta.env.VITE_HF_API_KEY;
         if (ENV_HF_KEY) {
           console.warn("Gemini limit reached. Automatically falling back to HuggingFace Router...");
           try {
@@ -321,12 +323,91 @@ const App: React.FC = () => {
       text = text.replace(/```json|```/g, '').trim();
       setClinicalAgent({ status: 'completed', data: text });
 
+      // 3. Prescription Generation (AI Clinical Assistant)
+      setPrescriptionAgent({ status: 'processing', data: null });
+      const prescriptionPrompt = `
+        You are a clinical assistant AI supporting a licensed doctor. 
+        Given a patient's symptom summary in English, generate a 
+        structured medical prescription for the doctor to review and approve.
+
+        Interaction Summary: ${text}
+
+        Output ONLY valid JSON, no preamble, no markdown:
+        {
+          "diagnosis": "...",
+          "medications": [
+            {
+              "name": "...",
+              "dosage": "...",
+              "frequency": "...",
+              "duration": "...",
+              "instructions": "..."
+            }
+          ],
+          "advice": "...",
+          "follow_up": "...",
+          "warnings": "..."
+        }
+      `;
+
+      let prescriptionText = "";
+      let pSuccess = false;
+      let pErrors = [];
+
+      for (const modelName of modelsToTry) {
+        if (pSuccess) break;
+        try {
+          console.log(`Attempting prescription with: ${modelName}`);
+          const model = genAI.getGenerativeModel({ model: modelName });
+          const result = await model.generateContent(prescriptionPrompt);
+          const response = await result.response;
+          prescriptionText = response.text();
+          pSuccess = true;
+          console.log(`Prescription success with model: ${modelName}`);
+        } catch (err: any) {
+          pErrors.push(`[${modelName}]: ${err.message || "Unknown error"}`);
+        }
+      }
+
+      if (!pSuccess && ENV_HF_KEY) {
+        try {
+          const hfResponse = await axios.post(
+            "https://router.huggingface.co/v1/chat/completions",
+            {
+              model: "meta-llama/Llama-3.1-8B-Instruct",
+              messages: [{ role: "user", content: prescriptionPrompt }],
+              max_tokens: 1000,
+              temperature: 0.1
+            },
+            { headers: { Authorization: `Bearer ${ENV_HF_KEY}`, "Content-Type": "application/json" } }
+          );
+          prescriptionText = hfResponse.data.choices[0]?.message?.content || "";
+          pSuccess = true;
+        } catch (hfErr: any) {
+          pErrors.push(`[HuggingFace Router]: ${hfErr.message}`);
+        }
+      }
+
+      if (!pSuccess) {
+        throw new Error(`Prescription generation failed. \n${pErrors.join('\n')}`);
+      }
+
+      prescriptionText = prescriptionText.replace(/```json|```/g, '').trim();
+      setPrescriptionAgent({ status: 'completed', data: prescriptionText });
+
     } catch (error: any) {
       console.error("Pipeline Final Error:", error);
-      setClinicalAgent({
+      if (clinicalAgent.status !== 'completed') {
+        setClinicalAgent({
+          status: 'error',
+          data: null,
+          error: error.message || 'Pipeline failed'
+        });
+      }
+      setPrescriptionAgent({
         status: 'error',
         data: null,
-        error: error.message || 'Pipeline failed'
+        error: error.message || 'Prescription failed'
       });
     } finally {
       setIsProcessing(false);
@@ -533,10 +614,23 @@ const App: React.FC = () => {
               <span className="badge badge-secondary">Clinical Record (Gemini)</span>
               <StatusBadge status={clinicalAgent.status} />
             </div>
-            <div className="output-area" style={{ flexGrow: 1, maxHeight: '300px' }}>
+            <div className="output-area" style={{ flexGrow: 1, maxHeight: '200px', marginBottom: '1rem' }}>
               {clinicalAgent.error ?
                 <span style={{ color: 'var(--danger)' }}>{clinicalAgent.error}</span> :
                 (clinicalAgent.data || "Structured data will appear here...")
+              }
+            </div>
+          </div>
+
+          <div className="agent-step active">
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+              <span className="badge" style={{ background: 'var(--accent)', color: 'white' }}>Prescription (Draft AI)</span>
+              <StatusBadge status={prescriptionAgent.status} />
+            </div>
+            <div className="output-area" style={{ flexGrow: 1, maxHeight: '300px' }}>
+              {prescriptionAgent.error ?
+                <span style={{ color: 'var(--danger)' }}>{prescriptionAgent.error}</span> :
+                (prescriptionAgent.data || "Draft prescription will appear here...")
               }
             </div>
           </div>

@@ -9,7 +9,8 @@ Spot Medicine AI is a high-performance clinical intelligence dashboard designed 
 - **Robust Translation Layer**: Automatically translates Tulu, Hindi, Tamil, and Kannada into clinical English using **Sarvam's Mayura-v1**.
 - **Resilient Intelligence Pipeline**: 
   - Primary processing via **Google Gemini (2.5-Flash/Pro)**.
-  - **Automatic Fallback**: If Gemini rate limits are hit (common on Free Tier), the app silently switches to **Hugging Face Router (Llama-3.1)** to finish the report.
+  - **AI Prescription Generation**: Automatically drafts a structured medical prescription (Diagnosis, Medications, Advice, Warnings) in JSON format for doctor verification.
+  - **Automatic Fallback**: If Gemini rate limits are hit (common on Free Tier), the app silently switches to **Hugging Face Router (Llama-3.1)** to finish the report and prescription.
 
 ## 🔑 How the API Keys Work
 
@@ -19,10 +20,10 @@ The application requires three distinct API keys to handle the different stages 
     - **Purpose**: Handles all Speech-to-Text (transcribing your voice) and Initial Translation (converting Tulu/Hindi to English).
     - **Get it from**: [Sarvam AI Dashboard](https://dashboard.sarvam.ai/).
 2.  **`VITE_GEMINI_API_KEY`**: 
-    - **Purpose**: Powering the "Intelligence" layer. It reads the English transcript and structures it into a medical JSON record.
+    - **Purpose**: Powering the "Intelligence" layer. It reads the English transcript to structure both the clinical record and the doctor's draft prescription.
     - **Get it from**: [Google AI Studio](https://aistudio.google.com/).
 3.  **`VITE_HF_API_KEY`**: 
-    - **Purpose**: The "Safety Net." If Gemini blocks your request due to daily free-tier limits, this key allows the app to use Hugging Face's open-source models to complete the work without error.
+    - **Purpose**: The "Safety Net." If Gemini blocks your request, this key allows the app to use Hugging Face's open-source models to complete both the clinical record and the prescription without error.
     - **Get it from**: [Hugging Face Settings](https://huggingface.co/settings/tokens). Ensure the token has "Inference" permissions.
 
 ## 🛠️ Setup Instructions
