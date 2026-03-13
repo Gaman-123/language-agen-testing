@@ -121,7 +121,7 @@ const App: React.FC = () => {
     formData.append('model', 'saaras:v3');
 
     if (roleAtTime === 'patient') {
-      const langMap: Record<string, string> = { 'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN', 'kn': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN', 'mr': 'mr-IN', 'pa': 'pa-IN' };
+      const langMap: Record<string, string> = { 'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN', 'kn': 'kn-IN', 'tcy': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN', 'mr': 'mr-IN', 'pa': 'pa-IN' };
       if (langMap[patientLanguage]) formData.append('language_code', langMap[patientLanguage]);
     } else {
       formData.append('language_code', 'en-IN');
@@ -219,7 +219,7 @@ const App: React.FC = () => {
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ fontSize: '12px', opacity: 0.6 }}>Patient Language</label>
             <select value={patientLanguage} onChange={e => setPatientLanguage(e.target.value)} style={{ width: '100%', marginTop: '5px' }}>
-              <option value="hi">Hindi</option><option value="ta">Tamil</option><option value="te">Telugu</option><option value="kn">Kannada</option><option value="bn">Bengali</option>
+              <option value="hi">Hindi</option><option value="ta">Tamil</option><option value="te">Telugu</option><option value="kn">Kannada</option><option value="tcy">Tulu</option><option value="bn">Bengali</option>
             </select>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
