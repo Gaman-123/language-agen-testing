@@ -3,12 +3,9 @@ import {
   Stethoscope,
   Activity,
   Database,
-  Volume2,
-  FileText,
   AlertCircle,
   CheckCircle2,
-  Mic,
-  Square
+  Mic
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -37,7 +34,6 @@ const App: React.FC = () => {
   const [sttStatus, setSttStatus] = useState<'idle' | 'recording' | 'processing'>('idle');
   const [clinicalAgent, setClinicalAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [isProcessing, setIsProcessing] = useState(false);
-  const [volume, setVolume] = useState(0);
 
   // Refs for recording
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -64,10 +60,6 @@ const App: React.FC = () => {
       const updateVolume = () => {
         if (!analyser.current) return;
         analyser.current.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
-        setVolume(sum / bufferLength);
-        animationFrame.current = requestAnimationFrame(updateVolume);
       };
       updateVolume();
 
@@ -102,7 +94,6 @@ const App: React.FC = () => {
       mediaRecorder.current.stop();
       if (animationFrame.current) cancelAnimationFrame(animationFrame.current);
       if (audioContext.current) audioContext.current.close();
-      setVolume(0);
       if (mediaStream.current) {
         mediaStream.current.getTracks().forEach(t => t.stop());
         mediaStream.current = null;
@@ -147,7 +138,47 @@ const App: React.FC = () => {
     setClinicalAgent({ status: 'processing', data: null });
 
     const conversationText = chatHistory.map(h => `${h.role.toUpperCase()}: ${h.content}`).join('\n');
-    const medicalPrompt = `Extract clinical summary and prescription in JSON. Generic names only. Role: Clinical Assistant. Context:\n${conversationText}`;
+    const medicalPrompt = `
+      You are a clinical documentation assistant in an Indian hospital.
+      From the consultation history, generate a structured clinical summary and prescription in JSON.
+
+      Extract details strictly based on these 7 dimensions:
+      1. Chief complaint (Primary issue)
+      2. Duration (Time since onset)
+      3. Severity (Pains scale 1-10 or descriptive)
+      4. Associated symptoms
+      5. Medical history (Existing conditions)
+      6. Allergies (Medicine/Food allergies)
+      7. Current meds (What they are taking now)
+
+      JSON Structure to return:
+      {
+        "patient_profile": {
+          "chief_complaint": "string",
+          "duration": "string",
+          "severity": "string",
+          "associated_symptoms": ["string"],
+          "medical_history": ["string"],
+          "allergies": ["string"],
+          "current_meds": ["string"]
+        },
+        "diagnosis": "string (one line)",
+        "prescription": [
+          { "medicine": "generic name", "dose": "strength", "frequency": "1-0-1", "duration": "days" }
+        ],
+        "advice": "string",
+        "follow_up": "string"
+      }
+
+      Rules:
+      - Use ONLY generic medicine names.
+      - Frequency must be in X-X-X format.
+      - If a field is unknown, use null.
+      - Return ONLY the JSON.
+
+      CONSULTATION HISTORY:
+      ${conversationText}
+    `;
 
     const genAI = new GoogleGenerativeAI(ENV_GEMINI_KEY);
     try {
@@ -223,10 +254,10 @@ const App: React.FC = () => {
             </select>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <button className="button" style={{ height: '80px', background: isRecording === 'doctor' ? '#ff4d4d' : 'var(--surface)' }} onClick={() => isRecording ? stopRecording() : startRecording('doctor')} disabled={sttStatus === 'processing' || (isRecording && isRecording !== 'doctor')}>
+            <button className="button" style={{ height: '80px', background: isRecording === 'doctor' ? '#ff4d4d' : 'var(--surface)' }} onClick={() => isRecording ? stopRecording() : startRecording('doctor')} disabled={sttStatus === 'processing' || !!(isRecording && isRecording !== 'doctor')}>
               <div style={{ textAlign: 'center' }}><Mic size={24} /><div style={{ fontSize: '10px' }}>Doctor (EN)</div></div>
             </button>
-            <button className="button" style={{ height: '80px', background: isRecording === 'patient' ? 'var(--primary)' : 'var(--surface)' }} onClick={() => isRecording ? stopRecording() : startRecording('patient')} disabled={sttStatus === 'processing' || (isRecording && isRecording !== 'patient')}>
+            <button className="button" style={{ height: '80px', background: isRecording === 'patient' ? 'var(--primary)' : 'var(--surface)' }} onClick={() => isRecording ? stopRecording() : startRecording('patient')} disabled={sttStatus === 'processing' || !!(isRecording && isRecording !== 'patient')}>
               <div style={{ textAlign: 'center' }}><Mic size={24} /><div style={{ fontSize: '10px' }}>Patient ({patientLanguage.toUpperCase()})</div></div>
             </button>
           </div>
@@ -250,12 +281,74 @@ const App: React.FC = () => {
 const ClinicalReportDisplay: React.FC<{ data: any }> = ({ data }) => {
   if (!data) return <span style={{ opacity: 0.5 }}>No report generated yet.</span>;
   let json: any = null;
-  try { json = typeof data === 'string' ? JSON.parse(data) : data; } catch { return <pre style={{ fontSize: '11px' }}>{data}</pre>; }
+  try {
+    json = typeof data === 'string' ? JSON.parse(data) : data;
+  } catch {
+    return <pre style={{ fontSize: '11px', whiteSpace: 'pre-wrap' }}>{data}</pre>;
+  }
+
+  const Section = ({ title, children, color = 'var(--accent)' }: { title: string, children: React.ReactNode, color?: string }) => (
+    <div style={{ marginBottom: '1.25rem' }}>
+      <h4 style={{ color, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>{title}</h4>
+      {children}
+    </div>
+  );
+
+  const profile = json.patient_profile || {};
+
   return (
-    <div style={{ fontSize: '13px' }}>
-      {json.summary && <div style={{ marginBottom: '10px' }}><b>Summary:</b> {json.summary.join(', ')}</div>}
-      {json.diagnosis && <div style={{ marginBottom: '10px' }}><b>Diagnosis:</b> {json.diagnosis}</div>}
-      {json.prescription && <div><b>Rx:</b><table style={{ width: '100%', marginTop: '5px' }}><tbody>{json.prescription.map((p: any, i: number) => <tr key={i}><td>{p.medicine}</td><td>{p.dose}</td><td>{p.frequency}</td></tr>)}</tbody></table></div>}
+    <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.9)' }}>
+      <Section title="Patient Intake Details">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Complaint:</b> <div style={{ color: 'white' }}>{profile.chief_complaint || 'N/A'}</div></div>
+          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Duration:</b> <div style={{ color: 'white' }}>{profile.duration || 'N/A'}</div></div>
+          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Severity:</b> <div style={{ color: 'white' }}>{profile.severity || 'N/A'}</div></div>
+          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Follow-up:</b> <div style={{ color: 'var(--secondary)' }}>{json.follow_up || 'As needed'}</div></div>
+        </div>
+      </Section>
+
+      <Section title="Clinical History & Allergies" color="#FF6B6B">
+        <div style={{ background: 'rgba(255,107,107,0.05)', padding: '10px', borderRadius: '8px' }}>
+          <div style={{ marginBottom: '5px' }}><b>Conditions:</b> {profile.medical_history?.join(', ') || 'None reported'}</div>
+          <div style={{ marginBottom: '5px' }}><b>Allergies:</b> <span style={{ color: '#FF6B6B', fontWeight: 'bold' }}>{profile.allergies?.join(', ') || 'No known allergies'}</span></div>
+          <div><b>Current Meds:</b> {profile.current_meds?.join(', ') || 'None'}</div>
+        </div>
+      </Section>
+
+      <Section title="Diagnosis" color="var(--primary)">
+        <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'white', margin: 0 }}>{json.diagnosis || 'Clinical evaluation required'}</p>
+      </Section>
+
+      {json.prescription && json.prescription.length > 0 && (
+        <Section title="Treatment Plan (Generic Medicines)">
+          <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ opacity: 0.5, fontSize: '11px' }}>
+                <th style={{ padding: '4px' }}>Medicine</th>
+                <th style={{ padding: '4px' }}>Dose</th>
+                <th style={{ padding: '4px' }}>Freq</th>
+                <th style={{ padding: '4px' }}>Dur</th>
+              </tr>
+            </thead>
+            <tbody>
+              {json.prescription.map((p: any, i: number) => (
+                <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <td style={{ padding: '6px 4px' }}><b>{p.medicine}</b></td>
+                  <td style={{ padding: '6px 4px' }}>{p.dose}</td>
+                  <td style={{ padding: '6px 4px', color: 'var(--secondary)' }}>{p.frequency}</td>
+                  <td style={{ padding: '6px 4px' }}>{p.duration}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
+
+      {json.advice && (
+        <Section title="Doctor's Advice">
+          <p style={{ fontStyle: 'italic', opacity: 0.8 }}>{json.advice}</p>
+        </Section>
+      )}
     </div>
   );
 };
