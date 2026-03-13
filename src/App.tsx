@@ -304,29 +304,51 @@ const App: React.FC = () => {
             {chatHistory.map((chat, idx) => (
               <div key={idx} style={{
                 alignSelf: chat.role === 'doctor' ? 'flex-start' : 'flex-end',
-                background: chat.role === 'doctor' ? 'rgba(78, 205, 196, 0.1)' : 'rgba(255, 107, 107, 0.1)',
-                padding: '12px',
-                borderRadius: '12px',
-                maxWidth: '80%',
-                border: '1px solid rgba(255,255,255,0.1)',
-                position: 'relative'
+                background: chat.role === 'doctor' ? 'rgba(78, 205, 196, 0.08)' : 'rgba(255, 107, 107, 0.08)',
+                padding: '12px 14px',
+                borderRadius: '14px',
+                maxWidth: '82%',
+                border: `1px solid ${chat.role === 'doctor' ? 'rgba(78,205,196,0.25)' : 'rgba(255,107,107,0.25)'}`,
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '10px', opacity: 0.5 }}>{chat.role.toUpperCase()}</span>
-                  {chat.translated && (
+                {/* Role label */}
+                <span style={{ fontSize: '9px', letterSpacing: '1.5px', textTransform: 'uppercase', opacity: 0.4, display: 'block', marginBottom: '5px' }}>
+                  {chat.role === 'doctor' ? '🩺 Doctor (English)' : '🗣 Patient (Regional)'}
+                </span>
+
+                {/* Original transcript */}
+                <div style={{ fontSize: '0.93rem', lineHeight: 1.5 }}>{chat.content}</div>
+
+                {/* Translated section with inline speaker */}
+                {chat.translated && (
+                  <div style={{
+                    marginTop: '10px',
+                    paddingTop: '10px',
+                    borderTop: '1px dashed rgba(255,255,255,0.08)',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '8px'
+                  }}>
+                    <div style={{ flex: 1, fontSize: '0.84rem', color: 'var(--secondary)', fontStyle: 'italic', lineHeight: 1.5 }}>
+                      {chat.translated}
+                    </div>
+                    {/* Per-translation speaker button */}
                     <button
                       onClick={() => callSarvamTTS(chat.translated!, chat.role === 'doctor' ? patientLanguage : 'en')}
-                      style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0 }}
-                      title="Read Translation"
+                      style={{
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: '8px',
+                        color: 'var(--accent)',
+                        cursor: 'pointer',
+                        padding: '4px 6px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        flexShrink: 0
+                      }}
+                      title={`Read in ${chat.role === 'doctor' ? 'patient language' : 'English'}`}
                     >
-                      <Volume2 size={14} className={isSpeaking ? "pulse" : ""} />
+                      <Volume2 size={14} className={isSpeaking ? 'pulse' : ''} />
                     </button>
-                  )}
-                </div>
-                <div style={{ fontSize: '0.95rem' }}>{chat.content}</div>
-                {chat.translated && (
-                  <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.85rem', color: 'var(--secondary)', fontStyle: 'italic' }}>
-                    {chat.translated}
                   </div>
                 )}
               </div>
