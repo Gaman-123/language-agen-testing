@@ -1,44 +1,30 @@
 import React, { useState, useRef } from 'react';
 import {
-  Stethoscope,
-  Activity,
-  Database,
-  AlertCircle,
-  CheckCircle2,
-  Mic,
-  Volume2
+  Stethoscope, Activity, Database, AlertCircle,
+  CheckCircle2, Mic, Volume2, Edit2, PlusCircle, Lock
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import axios from 'axios';
 
-// Types
-interface AgentState {
-  status: 'idle' | 'processing' | 'completed' | 'error';
-  data: any;
-  error?: string;
-}
+interface AgentState { status: 'idle' | 'processing' | 'completed' | 'error'; data: any; error?: string; }
+interface RxRow { medicine: string; dose: string; frequency: string; duration: string; }
+interface EditableRx { diagnosis: string; advice: string; follow_up: string; prescription: RxRow[]; }
 
 const App: React.FC = () => {
-  // API Keys from .env
   const ENV_GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
   const ENV_SARVAM_KEY = import.meta.env.VITE_SARVAM_API_KEY || '';
   const ENV_HF_KEY = import.meta.env.VITE_HF_API_KEY || '';
 
-  // App States
   const [patientLanguage, setPatientLanguage] = useState('hi');
   const [isRecording, setIsRecording] = useState<'doctor' | 'patient' | null>(null);
   const [activeRole, setActiveRole] = useState<'doctor' | 'patient' | null>(null);
   const [chatHistory, setChatHistory] = useState<Array<{ role: 'doctor' | 'patient' | 'assistant', content: string, translated?: string }>>([]);
-
-  // Agent States
   const [sttStatus, setSttStatus] = useState<'idle' | 'recording' | 'processing'>('idle');
   const [clinicalAgent, setClinicalAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [autoTTS, setAutoTTS] = useState(false);
 
-  // Refs for recording
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const mediaStream = useRef<MediaStream | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
@@ -50,33 +36,23 @@ const App: React.FC = () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setActiveRole(role);
-
       audioContext.current = new AudioContext();
       analyser.current = audioContext.current.createAnalyser();
       const source = audioContext.current.createMediaStreamSource(stream);
       source.connect(analyser.current);
       analyser.current.fftSize = 256;
-
       const bufferLength = analyser.current.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
-
-      const updateVolume = () => {
-        if (!analyser.current) return;
-        analyser.current.getByteFrequencyData(dataArray);
-      };
+      const updateVolume = () => { if (!analyser.current) return; analyser.current.getByteFrequencyData(dataArray); };
       updateVolume();
-
       mediaRecorder.current = new MediaRecorder(stream);
       audioChunks.current = [];
       mediaRecorder.current.ondataavailable = (e) => e.data.size > 0 && audioChunks.current.push(e.data);
       mediaStream.current = stream;
-
       mediaRecorder.current.start();
       setIsRecording(role);
       setSttStatus('recording');
-    } catch (err: any) {
-      alert(`Microphone error: ${err.message}`);
-    }
+    } catch (err: any) { alert(`Microphone error: ${err.message}`); }
   };
 
   const stopRecording = () => {
@@ -89,18 +65,12 @@ const App: React.FC = () => {
           const audioBuffer = await offlineContext.decodeAudioData(arrayBuffer);
           const wavBlob = audioBufferToWavBlob(audioBuffer);
           await handleSTT(wavBlob);
-        } catch (e) {
-          console.error(e);
-          setSttStatus('idle');
-        }
+        } catch (e) { console.error(e); setSttStatus('idle'); }
       };
       mediaRecorder.current.stop();
       if (animationFrame.current) cancelAnimationFrame(animationFrame.current);
       if (audioContext.current) audioContext.current.close();
-      if (mediaStream.current) {
-        mediaStream.current.getTracks().forEach(t => t.stop());
-        mediaStream.current = null;
-      }
+      if (mediaStream.current) { mediaStream.current.getTracks().forEach(t => t.stop()); mediaStream.current = null; }
       setIsRecording(null);
     }
   };
@@ -108,88 +78,113 @@ const App: React.FC = () => {
   const handleSTT = async (audioBlob: Blob) => {
     if (!ENV_SARVAM_KEY) return alert("Sarvam Key missing");
     setSttStatus('processing');
-
     const roleAtTime = activeRole;
     const formData = new FormData();
     formData.append('file', audioBlob, 'speech.wav');
     formData.append('model', 'saaras:v3');
 
+    const sttLangMap: Record<string, string> = {
+      'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN', 'kn': 'kn-IN',
+      'tcy': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN', 'mr': 'mr-IN', 'pa': 'pa-IN'
+    };
+    const langNameMap: Record<string, string> = {
+      'hi': 'Hindi', 'ta': 'Tamil', 'te': 'Telugu', 'kn': 'Kannada',
+      'tcy': 'Tulu', 'ml': 'Malayalam', 'bn': 'Bengali', 'gu': 'Gujarati',
+      'mr': 'Marathi', 'pa': 'Punjabi', 'en': 'English'
+    };
+
     if (roleAtTime === 'patient') {
-      const langMap: Record<string, string> = { 'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN', 'kn': 'kn-IN', 'tcy': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN', 'mr': 'mr-IN', 'pa': 'pa-IN' };
-      if (langMap[patientLanguage]) formData.append('language_code', langMap[patientLanguage]);
+      if (sttLangMap[patientLanguage]) formData.append('language_code', sttLangMap[patientLanguage]);
     } else {
       formData.append('language_code', 'en-IN');
     }
 
     try {
-      const res = await axios.post('https://api.sarvam.ai/speech-to-text', formData, {
+      const sttRes = await axios.post('https://api.sarvam.ai/speech-to-text', formData, {
         headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'multipart/form-data' }
       });
 
-      if (res.data?.transcript) {
-        const transcript = res.data.transcript;
+      if (sttRes.data?.transcript) {
+        const transcript = sttRes.data.transcript;
         let translation = '';
 
-        // Translation Logic: Opposite language
-        try {
-          const targetLang = roleAtTime === 'doctor' ? patientLanguage : 'en';
-          const sourceLang = roleAtTime === 'doctor' ? 'en' : patientLanguage;
-
-          if (targetLang !== sourceLang) {
-            const translateRes = await axios.post('https://api.sarvam.ai/translate', {
-              input: transcript,
-              source_language_code: sourceLang === 'en' ? 'en-IN' : `${sourceLang}-IN`,
-              target_language_code: targetLang === 'en' ? 'en-IN' : `${targetLang}-IN`,
-              speaker_gender: "Female",
-              mode: "formal"
-            }, {
-              headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' }
-            });
-            translation = translateRes.data.translated_text;
+        if (ENV_HF_KEY) {
+          try {
+            const sourceLangName = roleAtTime === 'doctor' ? 'English' : (langNameMap[patientLanguage] || patientLanguage);
+            const targetLangName = roleAtTime === 'doctor' ? (langNameMap[patientLanguage] || patientLanguage) : 'English';
+            const translatePrompt = `Translate the following ${sourceLangName} text to ${targetLangName}. Reply with ONLY the translated text, no explanations.\n\nText: ${transcript}`;
+            const hfRes = await axios.post('https://router.huggingface.co/v1/chat/completions', {
+              model: 'meta-llama/Llama-3.1-8B-Instruct',
+              messages: [{ role: 'user', content: translatePrompt }],
+              max_tokens: 300, temperature: 0.1
+            }, { headers: { Authorization: `Bearer ${ENV_HF_KEY}`, 'Content-Type': 'application/json' } });
+            translation = hfRes.data.choices?.[0]?.message?.content?.trim() || '';
+          } catch (tErr: any) {
+            console.error('HF Translation failed:', tErr?.response?.data || tErr.message);
           }
-        } catch (tErr) {
-          console.error("Translation failed", tErr);
         }
 
-        setChatHistory(prev => [...prev, {
-          role: roleAtTime || 'doctor',
-          content: transcript,
-          translated: translation
-        }]);
+        setChatHistory(prev => [...prev, { role: roleAtTime || 'doctor', content: transcript, translated: translation }]);
 
-        if (autoTTS && translation) {
+        if (translation) {
           callSarvamTTS(translation, roleAtTime === 'doctor' ? patientLanguage : 'en');
         }
       }
-    } catch (err) {
-      alert("Transcription failed");
+    } catch (err: any) {
+      console.error('STT error:', err?.response?.data || err.message);
+      alert('Transcription failed');
     } finally {
       setSttStatus('idle');
     }
   };
 
   const callSarvamTTS = async (text: string, langCode: string) => {
-    if (!ENV_SARVAM_KEY || !text) return;
-    try {
-      setIsSpeaking(true);
-      const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
-        inputs: [text],
-        target_language_code: langCode === 'en' ? 'en-IN' : `${langCode}-IN`,
-        speaker: 'meera',
-        model: 'bulbul:v1'
-      }, {
-        headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' }
-      });
+    if (!text) return;
+    const ttsLangMap: Record<string, string> = {
+      'tcy': 'kn-IN', 'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN',
+      'kn': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN',
+      'mr': 'mr-IN', 'pa': 'pa-IN', 'en': 'en-IN'
+    };
+    const targetLang = ttsLangMap[langCode] || 'en-IN';
 
-      if (res.data?.audios?.[0]) {
-        const audio = new Audio(`data:audio/wav;base64,${res.data.audios[0]}`);
-        audio.onended = () => setIsSpeaking(false);
-        await audio.play();
+    // Try Sarvam TTS first
+    if (ENV_SARVAM_KEY) {
+      try {
+        setIsSpeaking(true);
+        const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
+          inputs: [text.slice(0, 500)], // Sarvam has a char limit
+          target_language_code: targetLang,
+          speaker: 'meera',
+          model: 'bulbul:v1'
+        }, { headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' } });
+
+        if (res.data?.audios?.[0]) {
+          const audio = new Audio(`data:audio/wav;base64,${res.data.audios[0]}`);
+          audio.onended = () => setIsSpeaking(false);
+          audio.onerror = () => { setIsSpeaking(false); browserTTS(text, targetLang); };
+          await audio.play();
+          return;
+        }
+      } catch (err: any) {
+        console.warn('Sarvam TTS failed, falling back to browser TTS:', err?.response?.data || err.message);
       }
-    } catch (error) {
-      console.error("TTS Error:", error);
-      setIsSpeaking(false);
     }
+
+    // Fallback: Browser Web Speech API
+    browserTTS(text, targetLang);
+  };
+
+  const browserTTS = (text: string, bcp47Lang: string) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    // Map BCP-47 like 'kn-IN' to browser lang code
+    utter.lang = bcp47Lang;
+    utter.rate = 0.9;
+    utter.onstart = () => setIsSpeaking(true);
+    utter.onend = () => setIsSpeaking(false);
+    utter.onerror = () => setIsSpeaking(false);
+    window.speechSynthesis.speak(utter);
   };
 
   const processIntelligencePipeline = async () => {
@@ -200,48 +195,35 @@ const App: React.FC = () => {
     const conversationText = chatHistory.map(h => `${h.role.toUpperCase()}: ${h.content}`).join('\n');
     const medicalPrompt = `
       You are a clinical documentation assistant in an Indian hospital.
-      From the consultation history, generate a structured clinical summary and prescription in JSON.
+      Analyze the consultation history and return ONLY a JSON object.
 
-      Extract details strictly based on these 7 dimensions:
-      1. Chief complaint (Primary issue)
-      2. Duration (Time since onset)
-      3. Severity (Pains scale 1-10 or descriptive)
-      4. Associated symptoms
-      5. Medical history (Existing conditions)
-      6. Allergies (Medicine/Food allergies)
-      7. Current meds (What they are taking now)
-
-      JSON Structure to return:
+      JSON Structure:
       {
         "intake_completeness": {
-          "is_complete": boolean,
-          "missing_points": ["list of missing dimensions from the 7 above"],
-          "suggested_questions": ["specific questions for the doctor to ask the patient to fill gaps"]
+          "is_complete": true/false,
+          "missing_points": ["list any missing from: Chief Complaint, Duration, Severity, Associated Symptoms, Medical History, Allergies, Current Meds"],
+          "suggested_questions": ["specific follow-up questions for the doctor"]
         },
         "patient_profile": {
-          "chief_complaint": "string",
-          "duration": "string",
-          "severity": "string",
-          "associated_symptoms": ["string"],
-          "medical_history": ["string"],
-          "allergies": ["string"],
-          "current_meds": ["string"]
+          "chief_complaint": "string or null",
+          "duration": "string or null",
+          "severity": "string or null",
+          "associated_symptoms": ["array or empty"],
+          "medical_history": ["array or empty"],
+          "allergies": ["array or empty"],
+          "current_meds": ["array or empty"]
         },
-        "diagnosis": "string (one line)",
+        "diagnosis": "string",
         "prescription": [
-          { "medicine": "generic name", "dose": "strength", "frequency": "1-0-1", "duration": "days" }
+          { "medicine": "generic name only", "dose": "e.g. 500mg", "frequency": "e.g. 1-0-1", "duration": "e.g. 5 days" }
         ],
         "advice": "string",
         "follow_up": "string"
       }
 
-      Rules:
-      - Use ONLY generic medicine names.
-      - Frequency must be in X-X-X format.
-      - If a field is unknown, use null.
-      - Return ONLY the JSON.
+      Rules: Generic medicine names only. Frequency in X-X-X format. Return ONLY JSON.
 
-      CONSULTATION HISTORY:
+      CONSULTATION:
       ${conversationText}
     `;
 
@@ -250,41 +232,44 @@ const App: React.FC = () => {
       const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
       const result = await model.generateContent(medicalPrompt);
       let text = (await result.response).text().replace(/```json|```/g, '').trim();
+      // Extract the last (most complete) JSON object in the response
+      const jsonMatch = text.match(/\{[\s\S]*\}/g);
+      if (jsonMatch) text = jsonMatch[jsonMatch.length - 1];
       setClinicalAgent({ status: 'completed', data: text });
     } catch (err: any) {
       if (ENV_HF_KEY) {
         try {
           const hfRes = await axios.post("https://router.huggingface.co/v1/chat/completions", {
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            messages: [{ role: "user", content: medicalPrompt }],
-            max_tokens: 1000
+            messages: [{ role: "user", content: medicalPrompt }], max_tokens: 1200
           }, { headers: { Authorization: `Bearer ${ENV_HF_KEY}` } });
-          setClinicalAgent({ status: 'completed', data: hfRes.data.choices[0].message.content });
-        } catch {
-          setClinicalAgent({ status: 'error', data: null, error: err.message });
-        }
+          let hfText = hfRes.data.choices[0].message.content.replace(/```json|```/g, '').trim();
+          const hfMatch = hfText.match(/\{[\s\S]*\}/g);
+          if (hfMatch) hfText = hfMatch[hfMatch.length - 1];
+          setClinicalAgent({ status: 'completed', data: hfText });
+        } catch { setClinicalAgent({ status: 'error', data: null, error: err.message }); }
       } else {
         setClinicalAgent({ status: 'error', data: null, error: err.message });
       }
-    } finally {
-      setIsProcessing(false);
-    }
+    } finally { setIsProcessing(false); }
   };
 
   const audioBufferToWavBlob = (buffer: AudioBuffer): Blob => {
-    const numOfChan = buffer.numberOfChannels, length = buffer.length * numOfChan * 2 + 44, arrayBuffer = new ArrayBuffer(length), view = new DataView(arrayBuffer), channels = [];
+    const numOfChan = buffer.numberOfChannels, length = buffer.length * numOfChan * 2 + 44;
+    const arrayBuffer = new ArrayBuffer(length), view = new DataView(arrayBuffer), channels: Float32Array[] = [];
     let offset = 0;
     const setUint32 = (d: number) => { view.setUint32(offset, d, true); offset += 4; };
     const setUint16 = (d: number) => { view.setUint16(offset, d, true); offset += 2; };
-    setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157); setUint32(0x20746d66); setUint32(16); setUint16(1); setUint16(numOfChan); setUint32(buffer.sampleRate); setUint32(buffer.sampleRate * 2 * numOfChan); setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164); setUint32(length - offset - 4);
+    setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157); setUint32(0x20746d66); setUint32(16);
+    setUint16(1); setUint16(numOfChan); setUint32(buffer.sampleRate); setUint32(buffer.sampleRate * 2 * numOfChan);
+    setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164); setUint32(length - offset - 4);
     for (let i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i));
     let channel = 0;
     while (offset < length) {
       for (let i = 0; i < numOfChan; i++) {
         let sample = Math.max(-1, Math.min(1, channels[i][channel]));
         sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
-        view.setInt16(offset, sample, true);
-        offset += 2;
+        view.setInt16(offset, sample, true); offset += 2;
       }
       channel++;
     }
@@ -294,201 +279,282 @@ const App: React.FC = () => {
   return (
     <div className="app-container">
       <header>
-        <div className="logo"><Stethoscope size={32} /><span>Spot Medicine AI (Dual Mode)</span></div>
+        <div className="logo"><Stethoscope size={32} /><span>Spot Medicine AI</span></div>
         <div className="status-indicator"><div className="dot online"></div><span>Systems Online</span></div>
       </header>
       <main className="main-grid">
+        {/* LEFT: Consultation Panel */}
         <motion.section className="card" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-          <h2 className="card-title"><Activity size={24} className="gradient-text" />Consultation Mode</h2>
-          <div className="chat-container" style={{ height: '350px', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', padding: '1rem', overflowY: 'auto', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <h2 className="card-title"><Activity size={24} className="gradient-text" />Live Consultation</h2>
+
+          {/* Chat Log */}
+          <div style={{ height: '340px', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', padding: '1rem', overflowY: 'auto', marginBottom: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {chatHistory.length === 0 && (
+              <div style={{ textAlign: 'center', opacity: 0.3, marginTop: '40%', fontSize: '13px' }}>Start recording to begin the consultation...</div>
+            )}
             {chatHistory.map((chat, idx) => (
               <div key={idx} style={{
                 alignSelf: chat.role === 'doctor' ? 'flex-start' : 'flex-end',
-                background: chat.role === 'doctor' ? 'rgba(78, 205, 196, 0.08)' : 'rgba(255, 107, 107, 0.08)',
-                padding: '12px 14px',
-                borderRadius: '14px',
-                maxWidth: '82%',
-                border: `1px solid ${chat.role === 'doctor' ? 'rgba(78,205,196,0.25)' : 'rgba(255,107,107,0.25)'}`,
+                background: chat.role === 'doctor' ? 'rgba(78,205,196,0.08)' : 'rgba(255,107,107,0.08)',
+                padding: '12px 14px', borderRadius: '14px', maxWidth: '82%',
+                border: `1px solid ${chat.role === 'doctor' ? 'rgba(78,205,196,0.25)' : 'rgba(255,107,107,0.25)'}`
               }}>
-                {/* Role label */}
                 <span style={{ fontSize: '9px', letterSpacing: '1.5px', textTransform: 'uppercase', opacity: 0.4, display: 'block', marginBottom: '5px' }}>
                   {chat.role === 'doctor' ? '🩺 Doctor (English)' : '🗣 Patient (Regional)'}
                 </span>
-
-                {/* Original transcript */}
                 <div style={{ fontSize: '0.93rem', lineHeight: 1.5 }}>{chat.content}</div>
-
-                {/* Translated section with inline speaker */}
                 {chat.translated && (
-                  <div style={{
-                    marginTop: '10px',
-                    paddingTop: '10px',
-                    borderTop: '1px dashed rgba(255,255,255,0.08)',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '8px'
-                  }}>
-                    <div style={{ flex: 1, fontSize: '0.84rem', color: 'var(--secondary)', fontStyle: 'italic', lineHeight: 1.5 }}>
+                  <div style={{ marginTop: '9px', paddingTop: '8px', borderTop: '1px dashed rgba(255,255,255,0.08)', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                    <div style={{ flex: 1, fontSize: '0.82rem', color: 'rgba(255,255,255,0.45)', fontStyle: 'italic', lineHeight: 1.5 }}>
                       {chat.translated}
                     </div>
-                    {/* Per-translation speaker button */}
                     <button
                       onClick={() => callSarvamTTS(chat.translated!, chat.role === 'doctor' ? patientLanguage : 'en')}
-                      style={{
-                        background: 'rgba(255,255,255,0.06)',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        borderRadius: '8px',
-                        color: 'var(--accent)',
-                        cursor: 'pointer',
-                        padding: '4px 6px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        flexShrink: 0
-                      }}
-                      title={`Read in ${chat.role === 'doctor' ? 'patient language' : 'English'}`}
+                      title="Speak translation"
+                      style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '7px', color: 'var(--accent)', cursor: 'pointer', padding: '4px 6px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
                     >
-                      <Volume2 size={14} className={isSpeaking ? 'pulse' : ''} />
+                      <Volume2 size={13} className={isSpeaking ? 'pulse' : ''} />
                     </button>
                   </div>
                 )}
               </div>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '1rem', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
-            <label style={{ fontSize: '12px', opacity: 0.8, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-              <input type="checkbox" checked={autoTTS} onChange={e => setAutoTTS(e.target.checked)} />
-              Auto-Speak Translation
-            </label>
-            <button className="button" onClick={() => setChatHistory([])} style={{ padding: '4px 12px', fontSize: '12px', height: 'auto' }}>Clear</button>
-          </div>
-          <div style={{ marginBottom: '1rem' }}>
+
+          {/* Controls row */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
             <label style={{ fontSize: '12px', opacity: 0.6 }}>Patient Language</label>
-            <select value={patientLanguage} onChange={e => setPatientLanguage(e.target.value)} style={{ width: '100%', marginTop: '5px' }}>
-              <option value="hi">Hindi</option><option value="ta">Tamil</option><option value="te">Telugu</option><option value="kn">Kannada</option><option value="tcy">Tulu</option><option value="bn">Bengali</option>
-            </select>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <select value={patientLanguage} onChange={e => setPatientLanguage(e.target.value)} style={{ fontSize: '12px' }}>
+                <option value="hi">Hindi</option><option value="ta">Tamil</option><option value="te">Telugu</option>
+                <option value="kn">Kannada</option><option value="tcy">Tulu</option><option value="bn">Bengali</option>
+                <option value="ml">Malayalam</option><option value="gu">Gujarati</option>
+              </select>
+              <button className="button" onClick={() => setChatHistory([])} style={{ padding: '4px 12px', fontSize: '11px', height: 'auto' }}>Clear</button>
+            </div>
           </div>
-          <button className="button" onClick={processIntelligencePipeline} style={{ width: '100%', background: 'var(--accent)', marginBottom: '1.5rem', height: '48px' }} disabled={isProcessing || !chatHistory.length}>
-            {isProcessing ? "Analyzing Intake..." : "Check Completeness & Generate Rx"}
+
+          {/* Generate Rx */}
+          <button className="button" onClick={processIntelligencePipeline} style={{ width: '100%', background: 'linear-gradient(135deg,var(--primary),var(--accent))', marginBottom: '1rem', height: '44px', fontWeight: 700 }} disabled={isProcessing || !chatHistory.length}>
+            {isProcessing ? "Analyzing..." : "✅  Check Completeness & Generate Rx"}
           </button>
+
+          {/* Mic Buttons */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <button className="button" style={{ height: '80px', background: isRecording === 'doctor' ? '#ff4d4d' : 'var(--surface)' }} onClick={() => isRecording ? stopRecording() : startRecording('doctor')} disabled={sttStatus === 'processing' || !!(isRecording && isRecording !== 'doctor')}>
-              <div style={{ textAlign: 'center' }}><Mic size={24} /><div style={{ fontSize: '10px' }}>Doctor (EN)</div></div>
+            <button className="button" style={{ height: '76px', background: isRecording === 'doctor' ? '#ff4d4d' : 'var(--surface)', border: isRecording === 'doctor' ? '2px solid #ff4d4d' : '1px solid rgba(255,255,255,0.1)' }}
+              onClick={() => isRecording ? stopRecording() : startRecording('doctor')}
+              disabled={sttStatus === 'processing' || !!(isRecording && isRecording !== 'doctor')}>
+              <div style={{ textAlign: 'center' }}>
+                <Mic size={24} className={isRecording === 'doctor' ? 'pulse' : ''} />
+                <div style={{ fontSize: '10px', marginTop: '4px' }}>{isRecording === 'doctor' ? '⏹ Stop' : '🎤 Doctor (EN)'}</div>
+              </div>
             </button>
-            <button className="button" style={{ height: '80px', background: isRecording === 'patient' ? 'var(--primary)' : 'var(--surface)' }} onClick={() => isRecording ? stopRecording() : startRecording('patient')} disabled={sttStatus === 'processing' || !!(isRecording && isRecording !== 'patient')}>
-              <div style={{ textAlign: 'center' }}><Mic size={24} /><div style={{ fontSize: '10px' }}>Patient ({patientLanguage.toUpperCase()})</div></div>
+            <button className="button" style={{ height: '76px', background: isRecording === 'patient' ? 'var(--primary)' : 'var(--surface)', border: isRecording === 'patient' ? '2px solid var(--primary)' : '1px solid rgba(255,255,255,0.1)' }}
+              onClick={() => isRecording ? stopRecording() : startRecording('patient')}
+              disabled={sttStatus === 'processing' || !!(isRecording && isRecording !== 'patient')}>
+              <div style={{ textAlign: 'center' }}>
+                <Mic size={24} className={isRecording === 'patient' ? 'pulse' : ''} />
+                <div style={{ fontSize: '10px', marginTop: '4px' }}>{isRecording === 'patient' ? '⏹ Stop' : `🎤 Patient (${patientLanguage.toUpperCase()})`}</div>
+              </div>
             </button>
           </div>
         </motion.section>
-        <section className="card">
-          <h2 className="card-title"><Database size={24} /> Intelligence Pipeline</h2>
-          <div className="agent-step active">
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>STT/Translating</span><StatusBadge status={sttStatus === 'processing' ? 'processing' : 'idle'} /></div>
-            <div className="output-area">{sttStatus === 'processing' ? `Listening to ${activeRole}...` : "Idle"}</div>
+
+        {/* RIGHT: Report + Editable Prescription */}
+        <section className="card" style={{ overflowY: 'auto' }}>
+          <h2 className="card-title"><Database size={24} /> Clinical Report</h2>
+          <div className="agent-step active" style={{ marginBottom: '0.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Status</span>
+              <StatusBadge status={clinicalAgent.status} />
+            </div>
+            <div className="output-area" style={{ fontSize: '12px' }}>
+              {sttStatus === 'processing' ? `Transcribing ${activeRole}...` : clinicalAgent.status === 'idle' ? 'Idle — run a consultation first.' : ''}
+            </div>
           </div>
-          <div className="agent-step active" style={{ flexGrow: 1, overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Report</span><StatusBadge status={clinicalAgent.status} /></div>
-            <div className="output-area"><ClinicalReportDisplay data={clinicalAgent.data} /></div>
-          </div>
+          <ClinicalReportDisplay data={clinicalAgent.data} onSpeakSuggestion={(q) => callSarvamTTS(q, patientLanguage)} />
         </section>
       </main>
     </div>
   );
 };
 
-const ClinicalReportDisplay: React.FC<{ data: any }> = ({ data }) => {
-  if (!data) return <span style={{ opacity: 0.5 }}>No report generated yet.</span>;
-  let json: any = null;
-  try {
-    json = typeof data === 'string' ? JSON.parse(data) : data;
-  } catch {
-    return <pre style={{ fontSize: '11px', whiteSpace: 'pre-wrap' }}>{data}</pre>;
-  }
+/* ── Editable Clinical Report Display ── */
+const ClinicalReportDisplay: React.FC<{ data: any; onSpeakSuggestion: (q: string) => void }> = ({ data, onSpeakSuggestion }) => {
+  const [finalized, setFinalized] = useState(false);
+  const [rx, setRx] = useState<EditableRx | null>(null);
+  const [json, setJson] = useState<any>(null);
 
-  const Section = ({ title, children, color = 'var(--accent)' }: { title: string, children: React.ReactNode, color?: string }) => (
-    <div style={{ marginBottom: '1.25rem' }}>
-      <h4 style={{ color, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>{title}</h4>
-      {children}
-    </div>
-  );
+  React.useEffect(() => {
+    if (!data) { setRx(null); setJson(null); setFinalized(false); return; }
+    try {
+      // Handle both string and object data; extract last JSON block to skip any `{}` prefix
+      let raw = typeof data === 'string' ? data : JSON.stringify(data);
+      const matches = raw.match(/\{[\s\S]*\}/g);
+      const jsonStr = matches ? matches[matches.length - 1] : raw;
+      const parsed = JSON.parse(jsonStr);
+      setJson(parsed);
+      setRx({
+        diagnosis: parsed.diagnosis || '',
+        advice: parsed.advice || '',
+        follow_up: parsed.follow_up || '',
+        prescription: (parsed.prescription || []).map((p: any) => ({
+          medicine: p.medicine || '', dose: p.dose || '', frequency: p.frequency || '', duration: p.duration || ''
+        }))
+      });
+      setFinalized(false);
+    } catch (e) {
+      console.error('JSON parse error:', e);
+      setJson(null); setRx(null);
+    }
+  }, [data]);
+
+  if (!data) return <span style={{ opacity: 0.4, fontSize: '13px' }}>No report generated yet.</span>;
+  if (!json || !rx) return <pre style={{ fontSize: '11px', whiteSpace: 'pre-wrap', opacity: 0.7 }}>{String(data)}</pre>;
 
   const profile = json.patient_profile || {};
   const intake = json.intake_completeness || { is_complete: true };
 
+  const fieldStyle: React.CSSProperties = {
+    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: '6px', color: 'white', padding: '5px 8px', fontSize: '13px', width: '100%', outline: 'none', marginTop: '3px'
+  };
+
+  const updateRow = (i: number, f: keyof RxRow, v: string) => {
+    setRx(prev => { if (!prev) return prev; const rows = [...prev.prescription]; rows[i] = { ...rows[i], [f]: v }; return { ...prev, prescription: rows }; });
+  };
+
   return (
     <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.9)' }}>
+
+      {/* ─ Intake Completeness Warning ─ */}
       {!intake.is_complete && (
-        <div style={{ background: 'rgba(255,183,77,0.1)', border: '1px solid #FFB74D', padding: '12px', borderRadius: '12px', marginBottom: '1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#FFB74D', marginBottom: '8px' }}>
-            <AlertCircle size={18} />
-            <b style={{ textTransform: 'uppercase', fontSize: '11px', letterSpacing: '1px' }}>Incomplete Clinical Intake</b>
+        <div style={{ background: 'rgba(255,183,77,0.08)', border: '1px solid #FFB74D', padding: '12px', borderRadius: '12px', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#FFB74D', marginBottom: '6px' }}>
+            <AlertCircle size={16} />
+            <b style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px' }}>Incomplete Intake</b>
           </div>
-          <p style={{ fontSize: '12px', marginBottom: '8px', opacity: 0.9 }}>The consultation history is missing some critical clinical data points:</p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
-            {intake.missing_points?.map((point: string, i: number) => (
-              <span key={i} style={{ fontSize: '10px', background: 'rgba(255,183,77,0.2)', padding: '2px 8px', borderRadius: '4px', color: '#FFB74D' }}>{point}</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '10px' }}>
+            {intake.missing_points?.map((p: string, i: number) => (
+              <span key={i} style={{ fontSize: '10px', background: 'rgba(255,183,77,0.15)', padding: '2px 8px', borderRadius: '4px', color: '#FFB74D' }}>{p}</span>
             ))}
           </div>
-          <div style={{ padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
-            <b style={{ fontSize: '11px', display: 'block', marginBottom: '4px', opacity: 0.7 }}>Suggested Questions:</b>
-            <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '12px', color: '#FFB74D' }}>
-              {intake.suggested_questions?.map((q: string, i: number) => <li key={i}>{q}</li>)}
-            </ul>
-          </div>
+          <b style={{ fontSize: '11px', opacity: 0.6 }}>Suggested Questions for Doctor:</b>
+          <ul style={{ margin: '6px 0 0', paddingLeft: '1.1rem', color: '#FFB74D', fontSize: '12px' }}>
+            {intake.suggested_questions?.map((q: string, i: number) => (
+              <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                {q}
+                <button onClick={() => onSpeakSuggestion(q)} title="Read question" style={{ background: 'none', border: 'none', color: '#FFB74D', cursor: 'pointer', padding: 0 }}>
+                  <Volume2 size={12} />
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
-      <Section title="Patient Intake Details">
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Complaint:</b> <div style={{ color: 'white' }}>{profile.chief_complaint || 'N/A'}</div></div>
-          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Duration:</b> <div style={{ color: 'white' }}>{profile.duration || 'N/A'}</div></div>
-          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Severity:</b> <div style={{ color: 'white' }}>{profile.severity || 'N/A'}</div></div>
-          <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Follow-up:</b> <div style={{ color: 'var(--secondary)' }}>{json.follow_up || 'As needed'}</div></div>
+      {/* ─ Patient Summary (read-only) ─ */}
+      <div style={{ marginBottom: '1.25rem' }}>
+        <h4 style={{ color: 'var(--accent)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>Patient Summary</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '12px' }}>
+          {[['Complaint', profile.chief_complaint], ['Duration', profile.duration], ['Severity', profile.severity], ['Symptoms', profile.associated_symptoms?.join(', ')]].map(([k, v]) => (
+            <div key={k as string}><span style={{ opacity: 0.5 }}>{k as string}:</span> <span>{(v as string) || '—'}</span></div>
+          ))}
         </div>
-      </Section>
+        {(profile.allergies?.length > 0) && (
+          <div style={{ marginTop: '6px', padding: '6px 10px', background: 'rgba(255,107,107,0.08)', borderRadius: '8px', border: '1px solid rgba(255,107,107,0.2)' }}>
+            ⚠️ <b style={{ color: '#FF6B6B' }}>Allergies:</b> {profile.allergies.join(', ')}
+          </div>
+        )}
+        {(profile.medical_history?.length > 0) && <div style={{ marginTop: '4px', fontSize: '12px' }}><span style={{ opacity: 0.5 }}>History:</span> {profile.medical_history.join(', ')}</div>}
+        {(profile.current_meds?.length > 0) && <div style={{ marginTop: '4px', fontSize: '12px' }}><span style={{ opacity: 0.5 }}>Current Meds:</span> {profile.current_meds.join(', ')}</div>}
+      </div>
 
-      <Section title="Clinical History & Allergies" color="#FF6B6B">
-        <div style={{ background: 'rgba(255,107,107,0.05)', padding: '10px', borderRadius: '8px' }}>
-          <div style={{ marginBottom: '5px' }}><b>Conditions:</b> {profile.medical_history?.join(', ') || 'None reported'}</div>
-          <div style={{ marginBottom: '5px' }}><b>Allergies:</b> <span style={{ color: '#FF6B6B', fontWeight: 'bold' }}>{profile.allergies?.join(', ') || 'No known allergies'}</span></div>
-          <div><b>Current Meds:</b> {profile.current_meds?.join(', ') || 'None'}</div>
-        </div>
-      </Section>
-
-      <Section title="Diagnosis" color="var(--primary)">
-        <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'white', margin: 0 }}>{json.diagnosis || 'Clinical evaluation required'}</p>
-      </Section>
-
-      {json.prescription && json.prescription.length > 0 && (
-        <Section title="Treatment Plan (Generic Medicines)">
-          <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ opacity: 0.5, fontSize: '11px' }}>
-                <th style={{ padding: '4px' }}>Medicine</th>
-                <th style={{ padding: '4px' }}>Dose</th>
-                <th style={{ padding: '4px' }}>Freq</th>
-                <th style={{ padding: '4px' }}>Dur</th>
+      {/* ─ Doctor Edit Mode ─ */}
+      {finalized ? (
+        <div style={{ background: 'rgba(78,205,196,0.06)', border: '1px solid rgba(78,205,196,0.3)', borderRadius: '12px', padding: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <span style={{ color: 'var(--accent)', fontSize: '12px', fontWeight: 700 }}><Lock size={12} style={{ marginRight: 5 }} />Finalized Prescription</span>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={() => {
+                  const rxText = `Diagnosis: ${rx.diagnosis}. Medicines: ${rx.prescription.map(p => `${p.medicine}, ${p.dose}, ${p.frequency}, for ${p.duration}`).join('. ')}. ${rx.advice ? 'Advice: ' + rx.advice + '.' : ''} ${rx.follow_up ? 'Follow up: ' + rx.follow_up : ''}`;
+                  onSpeakSuggestion(rxText);
+                }}
+                title="Read prescription aloud"
+                style={{ background: 'rgba(78,205,196,0.1)', border: '1px solid rgba(78,205,196,0.3)', borderRadius: '6px', color: 'var(--accent)', cursor: 'pointer', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
+              >
+                <Volume2 size={13} /> Read
+              </button>
+              <button onClick={() => setFinalized(false)} style={{ fontSize: '11px', background: 'none', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '6px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', padding: '2px 10px' }}>Edit</button>
+            </div>
+          </div>
+          <div style={{ marginBottom: '8px' }}><b style={{ opacity: 0.5, fontSize: '10px', display: 'block' }}>DIAGNOSIS</b>{rx.diagnosis || '—'}</div>
+          <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', marginBottom: '8px' }}>
+            <thead><tr style={{ opacity: 0.4, fontSize: '10px' }}><th style={{ padding: '3px' }}>Medicine</th><th style={{ padding: '3px' }}>Dose</th><th style={{ padding: '3px' }}>Freq</th><th style={{ padding: '3px' }}>Duration</th></tr></thead>
+            <tbody>{rx.prescription.map((p, i) => (
+              <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <td style={{ padding: '5px 3px' }}><b>{p.medicine}</b></td>
+                <td style={{ padding: '5px 3px' }}>{p.dose}</td>
+                <td style={{ padding: '5px 3px', color: 'var(--secondary)' }}>{p.frequency}</td>
+                <td style={{ padding: '5px 3px' }}>{p.duration}</td>
               </tr>
-            </thead>
+            ))}</tbody>
+          </table>
+          {rx.advice && <div style={{ fontSize: '12px', fontStyle: 'italic', opacity: 0.7, marginBottom: '4px' }}>💊 {rx.advice}</div>}
+          {rx.follow_up && <div style={{ fontSize: '12px', color: 'var(--secondary)' }}>📅 Follow-up: {rx.follow_up}</div>}
+        </div>
+      ) : (
+        /* Edit Mode */
+        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '12px', padding: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', opacity: 0.5 }}>
+            <Edit2 size={13} /><span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px' }}>Doctor Edit Mode</span>
+          </div>
+
+          <label style={{ fontSize: '11px', opacity: 0.5 }}>Diagnosis</label>
+          <input style={fieldStyle} value={rx.diagnosis} onChange={e => setRx(p => p ? { ...p, diagnosis: e.target.value } : p)} placeholder="Enter diagnosis..." />
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', marginBottom: '6px' }}>
+            <label style={{ fontSize: '11px', opacity: 0.5 }}>Prescription (Generic)</label>
+            <button onClick={() => setRx(p => p ? { ...p, prescription: [...p.prescription, { medicine: '', dose: '', frequency: '', duration: '' }] } : p)}
+              style={{ fontSize: '11px', background: 'rgba(78,205,196,0.1)', border: '1px solid rgba(78,205,196,0.3)', borderRadius: '6px', color: 'var(--accent)', cursor: 'pointer', padding: '2px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <PlusCircle size={12} /> Add
+            </button>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ opacity: 0.4, fontSize: '10px' }}><th style={{ padding: '3px' }}>Medicine</th><th style={{ padding: '3px' }}>Dose</th><th style={{ padding: '3px' }}>Freq</th><th style={{ padding: '3px' }}>Days</th><th></th></tr></thead>
             <tbody>
-              {json.prescription.map((p: any, i: number) => (
+              {rx.prescription.map((p, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <td style={{ padding: '6px 4px' }}><b>{p.medicine}</b></td>
-                  <td style={{ padding: '6px 4px' }}>{p.dose}</td>
-                  <td style={{ padding: '6px 4px', color: 'var(--secondary)' }}>{p.frequency}</td>
-                  <td style={{ padding: '6px 4px' }}>{p.duration}</td>
+                  <td style={{ padding: '3px' }}><input style={{ ...fieldStyle, marginTop: 0 }} value={p.medicine} onChange={e => updateRow(i, 'medicine', e.target.value)} placeholder="paracetamol" /></td>
+                  <td style={{ padding: '3px' }}><input style={{ ...fieldStyle, marginTop: 0 }} value={p.dose} onChange={e => updateRow(i, 'dose', e.target.value)} placeholder="500mg" /></td>
+                  <td style={{ padding: '3px' }}><input style={{ ...fieldStyle, marginTop: 0 }} value={p.frequency} onChange={e => updateRow(i, 'frequency', e.target.value)} placeholder="1-0-1" /></td>
+                  <td style={{ padding: '3px' }}><input style={{ ...fieldStyle, marginTop: 0 }} value={p.duration} onChange={e => updateRow(i, 'duration', e.target.value)} placeholder="5 days" /></td>
+                  <td style={{ padding: '3px' }}><button onClick={() => setRx(prev => prev ? { ...prev, prescription: prev.prescription.filter((_, idx) => idx !== i) } : prev)} style={{ background: 'none', border: 'none', color: '#FF6B6B', cursor: 'pointer', fontSize: '16px' }}>×</button></td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </Section>
-      )}
 
-      {json.advice && (
-        <Section title="Doctor's Advice">
-          <p style={{ fontStyle: 'italic', opacity: 0.8 }}>{json.advice}</p>
-        </Section>
-      )}
-    </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px', marginBottom: '14px' }}>
+            <div>
+              <label style={{ fontSize: '11px', opacity: 0.5 }}>Advice</label>
+              <input style={fieldStyle} value={rx.advice} onChange={e => setRx(p => p ? { ...p, advice: e.target.value } : p)} placeholder="Rest, hydrate..." />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', opacity: 0.5 }}>Follow-up</label>
+              <input style={fieldStyle} value={rx.follow_up} onChange={e => setRx(p => p ? { ...p, follow_up: e.target.value } : p)} placeholder="After 5 days" />
+            </div>
+          </div>
+
+          <button onClick={() => setFinalized(true)}
+            style={{ width: '100%', padding: '11px', background: 'linear-gradient(135deg,var(--primary),var(--accent))', border: 'none', borderRadius: '10px', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer', letterSpacing: '0.5px' }}>
+            <Lock size={14} style={{ marginRight: 6 }} />Finalize Prescription
+          </button>
+        </div>
+      )
+      }
+    </div >
   );
 };
 
