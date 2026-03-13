@@ -36,6 +36,7 @@ const App: React.FC = () => {
   const [clinicalAgent, setClinicalAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [autoTTS, setAutoTTS] = useState(false);
 
   // Refs for recording
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -155,6 +156,10 @@ const App: React.FC = () => {
           content: transcript,
           translated: translation
         }]);
+
+        if (autoTTS && translation) {
+          callSarvamTTS(translation, roleAtTime === 'doctor' ? patientLanguage : 'en');
+        }
       }
     } catch (err) {
       alert("Transcription failed");
@@ -208,6 +213,11 @@ const App: React.FC = () => {
 
       JSON Structure to return:
       {
+        "intake_completeness": {
+          "is_complete": boolean,
+          "missing_points": ["list of missing dimensions from the 7 above"],
+          "suggested_questions": ["specific questions for the doctor to ask the patient to fill gaps"]
+        },
         "patient_profile": {
           "chief_complaint": "string",
           "duration": "string",
@@ -309,7 +319,7 @@ const App: React.FC = () => {
                       style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0 }}
                       title="Read Translation"
                     >
-                      <Volume2 size={14} />
+                      <Volume2 size={14} className={isSpeaking ? "pulse" : ""} />
                     </button>
                   )}
                 </div>
@@ -322,9 +332,12 @@ const App: React.FC = () => {
               </div>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '1.5rem' }}>
-            <button className="button" onClick={() => setChatHistory([])} style={{ flex: 1 }}>Reset</button>
-            <button className="button" onClick={processIntelligencePipeline} style={{ flex: 1, background: 'var(--accent)' }} disabled={isProcessing || !chatHistory.length}>End & Generate</button>
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '1rem', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
+            <label style={{ fontSize: '12px', opacity: 0.8, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={autoTTS} onChange={e => setAutoTTS(e.target.checked)} />
+              Auto-Speak Translation
+            </label>
+            <button className="button" onClick={() => setChatHistory([])} style={{ padding: '4px 12px', fontSize: '12px', height: 'auto' }}>Clear</button>
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ fontSize: '12px', opacity: 0.6 }}>Patient Language</label>
@@ -332,6 +345,9 @@ const App: React.FC = () => {
               <option value="hi">Hindi</option><option value="ta">Tamil</option><option value="te">Telugu</option><option value="kn">Kannada</option><option value="tcy">Tulu</option><option value="bn">Bengali</option>
             </select>
           </div>
+          <button className="button" onClick={processIntelligencePipeline} style={{ width: '100%', background: 'var(--accent)', marginBottom: '1.5rem', height: '48px' }} disabled={isProcessing || !chatHistory.length}>
+            {isProcessing ? "Analyzing Intake..." : "Check Completeness & Generate Rx"}
+          </button>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
             <button className="button" style={{ height: '80px', background: isRecording === 'doctor' ? '#ff4d4d' : 'var(--surface)' }} onClick={() => isRecording ? stopRecording() : startRecording('doctor')} disabled={sttStatus === 'processing' || !!(isRecording && isRecording !== 'doctor')}>
               <div style={{ textAlign: 'center' }}><Mic size={24} /><div style={{ fontSize: '10px' }}>Doctor (EN)</div></div>
@@ -374,9 +390,31 @@ const ClinicalReportDisplay: React.FC<{ data: any }> = ({ data }) => {
   );
 
   const profile = json.patient_profile || {};
+  const intake = json.intake_completeness || { is_complete: true };
 
   return (
     <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.9)' }}>
+      {!intake.is_complete && (
+        <div style={{ background: 'rgba(255,183,77,0.1)', border: '1px solid #FFB74D', padding: '12px', borderRadius: '12px', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#FFB74D', marginBottom: '8px' }}>
+            <AlertCircle size={18} />
+            <b style={{ textTransform: 'uppercase', fontSize: '11px', letterSpacing: '1px' }}>Incomplete Clinical Intake</b>
+          </div>
+          <p style={{ fontSize: '12px', marginBottom: '8px', opacity: 0.9 }}>The consultation history is missing some critical clinical data points:</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
+            {intake.missing_points?.map((point: string, i: number) => (
+              <span key={i} style={{ fontSize: '10px', background: 'rgba(255,183,77,0.2)', padding: '2px 8px', borderRadius: '4px', color: '#FFB74D' }}>{point}</span>
+            ))}
+          </div>
+          <div style={{ padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+            <b style={{ fontSize: '11px', display: 'block', marginBottom: '4px', opacity: 0.7 }}>Suggested Questions:</b>
+            <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '12px', color: '#FFB74D' }}>
+              {intake.suggested_questions?.map((q: string, i: number) => <li key={i}>{q}</li>)}
+            </ul>
+          </div>
+        </div>
+      )}
+
       <Section title="Patient Intake Details">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div><b style={{ opacity: 0.6, fontSize: '11px' }}>Complaint:</b> <div style={{ color: 'white' }}>{profile.chief_complaint || 'N/A'}</div></div>
