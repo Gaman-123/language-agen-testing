@@ -33,7 +33,6 @@ const App: React.FC = () => {
   // Agent States
   const [translationAgent, setTranslationAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [clinicalAgent, setClinicalAgent] = useState<AgentState>({ status: 'idle', data: null });
-  const [prescriptionAgent, setPrescriptionAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [sttStatus, setSttStatus] = useState<'idle' | 'recording' | 'processing'>('idle');
   const [isProcessing, setIsProcessing] = useState(false);
   const [volume, setVolume] = useState(0);
@@ -199,7 +198,6 @@ const App: React.FC = () => {
     setIsProcessing(true);
     setTranslationAgent({ status: 'processing', data: null });
     setClinicalAgent({ status: 'idle', data: null });
-    setPrescriptionAgent({ status: 'idle', data: null });
 
     try {
       // 1. Translation Layer (Sarvam AI)
@@ -255,12 +253,42 @@ const App: React.FC = () => {
       const genAI = new GoogleGenerativeAI(ENV_GEMINI_KEY);
 
       const medicalPrompt = `
-        You are a medical scribe assistant. Convert the following patient interaction into a structured JSON medical record.
-        Include sections: patient_summary, symptoms, duration, suspected_conditions, and suggested_next_steps.
-        
-        Interaction: ${translatedText}
-        
-        Output valid JSON only.
+        You are a clinical documentation assistant in an Indian hospital.
+        A doctor-patient consultation has just been transcribed and translated to English.
+
+        From the transcript below, extract and return ONLY this JSON structure.
+        Be extremely concise — no extra words, no explanations.
+
+        {
+          "summary": [
+            "symptom 1 (duration)",
+            "symptom 2 (duration)",
+            "max 3 bullet points"
+          ],
+          "diagnosis": "one line max",
+          "prescription": [
+            {
+              "medicine": "medicine name",
+              "dose": "500mg",
+              "frequency": "1-0-1",
+              "duration": "5 days"
+            }
+          ],
+          "tests": ["test 1", "test 2"],
+          "followup": "date or condition"
+        }
+
+        Rules:
+        - summary: max 3 bullets, each under 8 words
+        - diagnosis: one line only
+        - medicine names: generic names only, no brand names
+        - frequency format: morning-afternoon-night (e.g. 1-0-1)
+        - tests: only if doctor explicitly mentioned
+        - followup: one line only
+        - if something is not mentioned, return null for that field
+
+        TRANSCRIPT:
+        ${translatedText}
       `;
 
       const modelsToTry = [
@@ -319,95 +347,15 @@ const App: React.FC = () => {
         throw new Error(`All Gemini models failed. \n${errors.join('\n')}`);
       }
 
-      // Clean up markdown block if present
       text = text.replace(/```json|```/g, '').trim();
       setClinicalAgent({ status: 'completed', data: text });
 
-      // 3. Prescription Generation (AI Clinical Assistant)
-      setPrescriptionAgent({ status: 'processing', data: null });
-      const prescriptionPrompt = `
-        You are a clinical assistant AI supporting a licensed doctor. 
-        Given a patient's symptom summary in English, generate a 
-        structured medical prescription for the doctor to review and approve.
-
-        Interaction Summary: ${text}
-
-        Output ONLY valid JSON, no preamble, no markdown:
-        {
-          "diagnosis": "...",
-          "medications": [
-            {
-              "name": "...",
-              "dosage": "...",
-              "frequency": "...",
-              "duration": "...",
-              "instructions": "..."
-            }
-          ],
-          "advice": "...",
-          "follow_up": "...",
-          "warnings": "..."
-        }
-      `;
-
-      let prescriptionText = "";
-      let pSuccess = false;
-      let pErrors = [];
-
-      for (const modelName of modelsToTry) {
-        if (pSuccess) break;
-        try {
-          console.log(`Attempting prescription with: ${modelName}`);
-          const model = genAI.getGenerativeModel({ model: modelName });
-          const result = await model.generateContent(prescriptionPrompt);
-          const response = await result.response;
-          prescriptionText = response.text();
-          pSuccess = true;
-          console.log(`Prescription success with model: ${modelName}`);
-        } catch (err: any) {
-          pErrors.push(`[${modelName}]: ${err.message || "Unknown error"}`);
-        }
-      }
-
-      if (!pSuccess && ENV_HF_KEY) {
-        try {
-          const hfResponse = await axios.post(
-            "https://router.huggingface.co/v1/chat/completions",
-            {
-              model: "meta-llama/Llama-3.1-8B-Instruct",
-              messages: [{ role: "user", content: prescriptionPrompt }],
-              max_tokens: 1000,
-              temperature: 0.1
-            },
-            { headers: { Authorization: `Bearer ${ENV_HF_KEY}`, "Content-Type": "application/json" } }
-          );
-          prescriptionText = hfResponse.data.choices[0]?.message?.content || "";
-          pSuccess = true;
-        } catch (hfErr: any) {
-          pErrors.push(`[HuggingFace Router]: ${hfErr.message}`);
-        }
-      }
-
-      if (!pSuccess) {
-        throw new Error(`Prescription generation failed. \n${pErrors.join('\n')}`);
-      }
-
-      prescriptionText = prescriptionText.replace(/```json|```/g, '').trim();
-      setPrescriptionAgent({ status: 'completed', data: prescriptionText });
-
     } catch (error: any) {
       console.error("Pipeline Final Error:", error);
-      if (clinicalAgent.status !== 'completed') {
-        setClinicalAgent({
-          status: 'error',
-          data: null,
-          error: error.message || 'Pipeline failed'
-        });
-      }
-      setPrescriptionAgent({
+      setClinicalAgent({
         status: 'error',
         data: null,
-        error: error.message || 'Prescription failed'
+        error: error.message || 'Pipeline failed'
       });
     } finally {
       setIsProcessing(false);
@@ -611,27 +559,15 @@ const App: React.FC = () => {
 
           <div className="agent-step active">
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <span className="badge badge-secondary">Clinical Record (Gemini)</span>
+              <span className="badge badge-secondary">Clinical Insights (Indian Hospital Standard)</span>
               <StatusBadge status={clinicalAgent.status} />
             </div>
-            <div className="output-area" style={{ flexGrow: 1, maxHeight: '200px', marginBottom: '1rem' }}>
-              {clinicalAgent.error ?
-                <span style={{ color: 'var(--danger)' }}>{clinicalAgent.error}</span> :
-                (clinicalAgent.data || "Structured data will appear here...")
-              }
-            </div>
-          </div>
-
-          <div className="agent-step active">
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <span className="badge" style={{ background: 'var(--accent)', color: 'white' }}>Prescription (Draft AI)</span>
-              <StatusBadge status={prescriptionAgent.status} />
-            </div>
-            <div className="output-area" style={{ flexGrow: 1, maxHeight: '300px' }}>
-              {prescriptionAgent.error ?
-                <span style={{ color: 'var(--danger)' }}>{prescriptionAgent.error}</span> :
-                (prescriptionAgent.data || "Draft prescription will appear here...")
-              }
+            <div className="output-area" style={{ flexGrow: 1, maxHeight: '500px', overflowY: 'auto' }}>
+              {clinicalAgent.error ? (
+                <span style={{ color: 'var(--danger)' }}>{clinicalAgent.error}</span>
+              ) : (
+                <ClinicalReportDisplay data={clinicalAgent.data} />
+              )}
             </div>
           </div>
 
@@ -645,6 +581,78 @@ const App: React.FC = () => {
           </div>
         </motion.section>
       </main>
+    </div>
+  );
+};
+
+const ClinicalReportDisplay: React.FC<{ data: any }> = ({ data }) => {
+  if (!data) return <span style={{ opacity: 0.5 }}>Waiting for intelligence processing...</span>;
+
+  let json: any = null;
+  try {
+    json = typeof data === 'string' ? JSON.parse(data) : data;
+  } catch (e) {
+    return <pre style={{ fontSize: '12px', whiteSpace: 'pre-wrap' }}>{data}</pre>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      {json.summary && (
+        <div>
+          <h4 style={{ color: 'var(--accent)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem' }}>Summary</h4>
+          <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
+            {json.summary.map((item: string, i: number) => <li key={i} style={{ fontSize: '0.9rem', marginBottom: '0.25rem' }}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {json.diagnosis && (
+        <div>
+          <h4 style={{ color: 'var(--accent)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>Diagnosis</h4>
+          <p style={{ fontSize: '1rem', fontWeight: 600, margin: 0, color: 'white' }}>{json.diagnosis}</p>
+        </div>
+      )}
+
+      {json.prescription && json.prescription.length > 0 && (
+        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '8px', padding: '0.75rem', border: '1px solid rgba(255,255,255,0.05)' }}>
+          <h4 style={{ color: 'var(--accent)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.75rem' }}>Prescription (Generic)</h4>
+          <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ color: 'rgba(255,255,255,0.4)', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                <th style={{ padding: '4px' }}>Medicine</th>
+                <th style={{ padding: '4px' }}>Dose</th>
+                <th style={{ padding: '4px' }}>Freq.</th>
+                <th style={{ padding: '4px' }}>Dur.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {json.prescription.map((m: any, i: number) => (
+                <tr key={i} style={{ borderBottom: i < json.prescription.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                  <td style={{ padding: '8px 4px', fontWeight: 500 }}>{m.medicine}</td>
+                  <td style={{ padding: '8px 4px' }}>{m.dose}</td>
+                  <td style={{ padding: '8px 4px', color: 'var(--secondary)' }}>{m.frequency}</td>
+                  <td style={{ padding: '8px 4px' }}>{m.duration}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+        {json.tests && json.tests.length > 0 && (
+          <div>
+            <h4 style={{ color: 'var(--accent)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>Tests</h4>
+            <p style={{ fontSize: '0.85rem', margin: 0 }}>{json.tests.join(', ')}</p>
+          </div>
+        )}
+        {json.followup && (
+          <div>
+            <h4 style={{ color: 'var(--accent)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.25rem' }}>Follow-up</h4>
+            <p style={{ fontSize: '0.85rem', margin: 0, color: 'var(--secondary)' }}>{json.followup}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
