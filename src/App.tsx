@@ -5,7 +5,8 @@ import {
   Database,
   AlertCircle,
   CheckCircle2,
-  Mic
+  Mic,
+  Volume2
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -28,12 +29,13 @@ const App: React.FC = () => {
   const [patientLanguage, setPatientLanguage] = useState('hi');
   const [isRecording, setIsRecording] = useState<'doctor' | 'patient' | null>(null);
   const [activeRole, setActiveRole] = useState<'doctor' | 'patient' | null>(null);
-  const [chatHistory, setChatHistory] = useState<Array<{ role: 'doctor' | 'patient' | 'assistant', content: string }>>([]);
+  const [chatHistory, setChatHistory] = useState<Array<{ role: 'doctor' | 'patient' | 'assistant', content: string, translated?: string }>>([]);
 
   // Agent States
   const [sttStatus, setSttStatus] = useState<'idle' | 'recording' | 'processing'>('idle');
   const [clinicalAgent, setClinicalAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   // Refs for recording
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -122,13 +124,66 @@ const App: React.FC = () => {
       const res = await axios.post('https://api.sarvam.ai/speech-to-text', formData, {
         headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'multipart/form-data' }
       });
+
       if (res.data?.transcript) {
-        setChatHistory(prev => [...prev, { role: roleAtTime || 'doctor', content: res.data.transcript }]);
+        const transcript = res.data.transcript;
+        let translation = '';
+
+        // Translation Logic: Opposite language
+        try {
+          const targetLang = roleAtTime === 'doctor' ? patientLanguage : 'en';
+          const sourceLang = roleAtTime === 'doctor' ? 'en' : patientLanguage;
+
+          if (targetLang !== sourceLang) {
+            const translateRes = await axios.post('https://api.sarvam.ai/translate', {
+              input: transcript,
+              source_language_code: sourceLang === 'en' ? 'en-IN' : `${sourceLang}-IN`,
+              target_language_code: targetLang === 'en' ? 'en-IN' : `${targetLang}-IN`,
+              speaker_gender: "Female",
+              mode: "formal"
+            }, {
+              headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' }
+            });
+            translation = translateRes.data.translated_text;
+          }
+        } catch (tErr) {
+          console.error("Translation failed", tErr);
+        }
+
+        setChatHistory(prev => [...prev, {
+          role: roleAtTime || 'doctor',
+          content: transcript,
+          translated: translation
+        }]);
       }
     } catch (err) {
       alert("Transcription failed");
     } finally {
       setSttStatus('idle');
+    }
+  };
+
+  const callSarvamTTS = async (text: string, langCode: string) => {
+    if (!ENV_SARVAM_KEY || !text) return;
+    try {
+      setIsSpeaking(true);
+      const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
+        inputs: [text],
+        target_language_code: langCode === 'en' ? 'en-IN' : `${langCode}-IN`,
+        speaker: 'meera',
+        model: 'bulbul:v1'
+      }, {
+        headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' }
+      });
+
+      if (res.data?.audios?.[0]) {
+        const audio = new Audio(`data:audio/wav;base64,${res.data.audios[0]}`);
+        audio.onended = () => setIsSpeaking(false);
+        await audio.play();
+      }
+    } catch (error) {
+      console.error("TTS Error:", error);
+      setIsSpeaking(false);
     }
   };
 
@@ -237,9 +292,33 @@ const App: React.FC = () => {
           <h2 className="card-title"><Activity size={24} className="gradient-text" />Consultation Mode</h2>
           <div className="chat-container" style={{ height: '350px', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', padding: '1rem', overflowY: 'auto', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {chatHistory.map((chat, idx) => (
-              <div key={idx} style={{ alignSelf: chat.role === 'doctor' ? 'flex-start' : 'flex-end', background: chat.role === 'doctor' ? 'rgba(78, 205, 196, 0.1)' : 'rgba(255, 107, 107, 0.1)', padding: '10px', borderRadius: '12px', maxWidth: '80%', border: '1px solid rgba(255,255,255,0.1)' }}>
-                <span style={{ fontSize: '10px', opacity: 0.5, display: 'block' }}>{chat.role.toUpperCase()}</span>
-                {chat.content}
+              <div key={idx} style={{
+                alignSelf: chat.role === 'doctor' ? 'flex-start' : 'flex-end',
+                background: chat.role === 'doctor' ? 'rgba(78, 205, 196, 0.1)' : 'rgba(255, 107, 107, 0.1)',
+                padding: '12px',
+                borderRadius: '12px',
+                maxWidth: '80%',
+                border: '1px solid rgba(255,255,255,0.1)',
+                position: 'relative'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '10px', opacity: 0.5 }}>{chat.role.toUpperCase()}</span>
+                  {chat.translated && (
+                    <button
+                      onClick={() => callSarvamTTS(chat.translated!, chat.role === 'doctor' ? patientLanguage : 'en')}
+                      style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0 }}
+                      title="Read Translation"
+                    >
+                      <Volume2 size={14} />
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.95rem' }}>{chat.content}</div>
+                {chat.translated && (
+                  <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.85rem', color: 'var(--secondary)', fontStyle: 'italic' }}>
+                    {chat.translated}
+                  </div>
+                )}
               </div>
             ))}
           </div>
