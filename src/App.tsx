@@ -7,7 +7,6 @@ import {
   FileText,
   AlertCircle,
   CheckCircle2,
-  Sparkles,
   Mic,
   Square
 } from 'lucide-react';
@@ -26,15 +25,18 @@ const App: React.FC = () => {
   // API Keys from .env
   const ENV_GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
 
-  const [inputText, setInputText] = useState('');
   const [language, setLanguage] = useState('en');
   const [isRecording, setIsRecording] = useState(false);
+  const [chatHistory, setChatHistory] = useState<Array<{ role: 'user' | 'model', content: string }>>([]);
+  const [isIntakeComplete, setIsIntakeComplete] = useState(false);
 
   // Agent States
   const [translationAgent, setTranslationAgent] = useState<AgentState>({ status: 'idle', data: null });
+  const [intakeAgent, setIntakeAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [clinicalAgent, setClinicalAgent] = useState<AgentState>({ status: 'idle', data: null });
   const [sttStatus, setSttStatus] = useState<'idle' | 'recording' | 'processing'>('idle');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [volume, setVolume] = useState(0);
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -175,7 +177,8 @@ const App: React.FC = () => {
       });
 
       if (response.data && response.data.transcript) {
-        setInputText(response.data.transcript);
+        setSttStatus('idle');
+        handleConversationStep(response.data.transcript);
       } else {
         throw new Error("No transcript in response");
       }
@@ -183,80 +186,164 @@ const App: React.FC = () => {
       console.error("STT Error details:", error.response?.data || error.message);
       const detail = error.response?.data?.message || error.response?.data?.error || error.message;
       alert(`Speech recognition failed: ${detail}`);
-    } finally {
       setSttStatus('idle');
     }
   };
 
+  const callSarvamTTS = async (text: string) => {
+    try {
+      setIsSpeaking(true);
+      const langMap: Record<string, string> = {
+        'hi': 'hi-IN',
+        'kn': 'kn-IN',
+        'ta': 'ta-IN',
+        'te': 'te-IN',
+        'en': 'en-IN'
+      };
+
+      const response = await axios.post('https://api.sarvam.ai/text-to-speech', {
+        inputs: [text],
+        target_language_code: langMap[language] || 'en-IN',
+        speaker: 'meera',
+        model: 'bulbul:v1'
+      }, {
+        headers: {
+          'api-subscription-key': import.meta.env.VITE_SARVAM_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.data?.audios?.[0]) {
+        const audio = new Audio(`data:audio/wav;base64,${response.data.audios[0]}`);
+        audio.onended = () => setIsSpeaking(false);
+        await audio.play();
+      }
+    } catch (error) {
+      console.error("TTS Error:", error);
+      setIsSpeaking(false);
+    }
+  };
+
+  const handleConversationStep = async (newInput: string) => {
+    if (isIntakeComplete || isProcessing) return;
+
+    setIsProcessing(true);
+    const updatedHistory = [...chatHistory, { role: 'user' as const, content: newInput }];
+    setChatHistory(updatedHistory);
+    setIntakeAgent({ status: 'processing', data: "Thinking..." });
+
+    const ENV_HF_KEY = import.meta.env.VITE_HF_API_KEY || '';
+    const genAI = new GoogleGenerativeAI(ENV_GEMINI_KEY);
+
+    const langNameMap: Record<string, string> = {
+      'hi': 'Hindi',
+      'ta': 'Tamil',
+      'te': 'Telugu',
+      'kn': 'Kannada',
+      'tcy': 'Tulu',
+      'en': 'English'
+    };
+    const patientLang = langNameMap[language] || 'English';
+
+    const assistantPrompt = `
+      You are a warm, empathetic medical intake assistant conducting a 
+      spoken conversation with a patient in ${patientLang}.
+
+      Your goal is to gather enough information to generate a prescription summary.
+      Ask ONE question at a time. Keep questions short and simple.
+
+      Follow this sequence naturally (don't follow rigidly — adapt based on answers):
+      1. Chief complaint → "What is bothering you today?"
+      2. Duration        → "How long have you had this?"
+      3. Severity        → "On a scale of 1–10, how bad is it?"
+      4. Associated symptoms → "Are you also experiencing [X]?"
+      5. Medical history → "Do you have any existing conditions?"
+      6. Allergies       → "Are you allergic to any medicines?"
+      7. Current meds    → "Are you taking any medicines right now?"
+
+      When you have enough information (minimum 4 exchanges), 
+      add "INTAKE_COMPLETE" silently at the end of your last message.
+
+      Respond always in ${patientLang}. 
+      Be conversational, not clinical. Never overwhelm the patient.
+    `;
+
+    try {
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const chat = model.startChat({
+        history: chatHistory.map(h => ({ role: h.role, parts: [{ text: h.content }] })),
+        systemInstruction: assistantPrompt
+      });
+
+      const result = await chat.sendMessage(newInput);
+      const response = await result.response;
+      let assistantResponse = response.text();
+
+      if (assistantResponse.includes("INTAKE_COMPLETE")) {
+        assistantResponse = assistantResponse.replace("INTAKE_COMPLETE", "").trim();
+        setIsIntakeComplete(true);
+      }
+
+      setChatHistory(prev => [...prev, { role: 'model', content: assistantResponse }]);
+      setIntakeAgent({ status: 'completed', data: assistantResponse });
+
+      callSarvamTTS(assistantResponse);
+
+    } catch (error: any) {
+      if (ENV_HF_KEY) {
+        try {
+          const hfResponse = await axios.post(
+            "https://router.huggingface.co/v1/chat/completions",
+            {
+              model: "meta-llama/Llama-3.1-8B-Instruct",
+              messages: [
+                { role: "system", content: assistantPrompt },
+                ...chatHistory,
+                { role: "user", content: newInput }
+              ],
+              max_tokens: 500
+            },
+            { headers: { Authorization: `Bearer ${ENV_HF_KEY}`, "Content-Type": "application/json" } }
+          );
+          let hfText = hfResponse.data.choices[0]?.message?.content || "";
+          if (hfText.includes("INTAKE_COMPLETE")) {
+            hfText = hfText.replace("INTAKE_COMPLETE", "").trim();
+            setIsIntakeComplete(true);
+          }
+          setChatHistory(prev => [...prev, { role: 'model', content: hfText }]);
+          setIntakeAgent({ status: 'completed', data: hfText });
+          callSarvamTTS(hfText);
+          return;
+        } catch (hfErr) {
+          console.error("HF Intake Fallback Failed:", hfErr);
+        }
+      }
+      console.error("Intake Error:", error);
+      setIntakeAgent({ status: 'error', data: null, error: error.message });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const processIntelligencePipeline = async () => {
-    if (!inputText.trim() || !ENV_GEMINI_KEY) {
+    if (!chatHistory.length || !ENV_GEMINI_KEY) {
       alert("Missing Gemini API Key in .env file.");
       return;
     }
 
-    const ENV_HF_KEY = import.meta.env.VITE_HF_API_KEY || '';
+    const conversationText = chatHistory.map(h => `${h.role === 'user' ? 'Patient' : 'Assistant'}: ${h.content}`).join('\n');
+
     setIsProcessing(true);
-    setTranslationAgent({ status: 'processing', data: null });
-    setClinicalAgent({ status: 'idle', data: null });
+    setTranslationAgent({ status: 'completed', data: "Using full conversation context." });
+    setClinicalAgent({ status: 'processing', data: null });
+    const ENV_HF_KEY = import.meta.env.VITE_HF_API_KEY || '';
+    const genAI = new GoogleGenerativeAI(ENV_GEMINI_KEY);
 
-    try {
-      // 1. Translation Layer (Sarvam AI)
-      let translatedText = inputText;
-      if (language !== 'en') {
-        setTranslationAgent({ status: 'processing', data: "Calling Sarvam Translate..." });
-        try {
-          const langMap: Record<string, string> = {
-            'hi': 'hi-IN',
-            'ta': 'ta-IN',
-            'te': 'te-IN',
-            'kn': 'kn-IN',
-            'tcy': 'kn-IN' // Tulu uses Kannada script; map to kn-IN for Sarvam Translate
-          };
-          const sourceLang = langMap[language] || 'kn-IN';
-
-          const sarvamResponse = await axios.post(
-            "https://api.sarvam.ai/translate",
-            {
-              input: inputText,
-              source_language_code: sourceLang,
-              target_language_code: "en-IN",
-              speaker_gender: "Male",
-              mode: "formal",
-              model: "mayura:v1"
-            },
-            {
-              headers: {
-                "api-subscription-key": import.meta.env.VITE_SARVAM_API_KEY,
-                "Content-Type": "application/json"
-              }
-            }
-          );
-
-          translatedText = sarvamResponse.data.translated_text || inputText;
-          setTranslationAgent({ status: 'completed', data: translatedText });
-        } catch (err: any) {
-          console.error("Sarvam Translate Error:", err.response?.data || err.message);
-          const errorMsg = err.response?.data?.message || err.message || "Unknown error";
-          setTranslationAgent({
-            status: 'error',
-            data: `Translation failed (${errorMsg}). Using original text.`,
-            error: errorMsg
-          });
-          translatedText = inputText;
-        }
-      } else {
-        setTranslationAgent({ status: 'completed', data: "Input already in English. Skipping translation." });
-      }
-
-      // 2. Clinical Intelligence (Multi-Model Fallback)
-      setClinicalAgent({ status: 'processing', data: null });
-      const genAI = new GoogleGenerativeAI(ENV_GEMINI_KEY);
-
-      const medicalPrompt = `
+    const medicalPrompt = `
         You are a clinical documentation assistant in an Indian hospital.
-        A doctor-patient consultation has just been transcribed and translated to English.
+        A doctor-patient consultation history is provided.
 
-        From the transcript below, extract and return ONLY this JSON structure.
+        From the conversation history below, extract and return ONLY this JSON structure.
         Be extremely concise — no extra words, no explanations.
 
         {
@@ -287,15 +374,14 @@ const App: React.FC = () => {
         - followup: one line only
         - if something is not mentioned, return null for that field
 
-        TRANSCRIPT:
-        ${translatedText}
+        CONVERSATION HISTORY:
+        ${conversationText}
       `;
 
+    try {
       const modelsToTry = [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
         "gemini-2.0-flash",
-        "gemini-1.5-flash-8b", // Added extremely high-rate-limit free tier fallback model
+        "gemini-1.5-flash-8b",
         "gemini-1.5-flash"
       ];
 
@@ -306,60 +392,55 @@ const App: React.FC = () => {
       for (const modelName of modelsToTry) {
         if (success) break;
         try {
-          console.log(`Attempting clinical structuring with: ${modelName}`);
+          console.log(`Attempting final structuring with: ${modelName}`);
           const model = genAI.getGenerativeModel({ model: modelName });
           const result = await model.generateContent(medicalPrompt);
           const response = await result.response;
           text = response.text();
           success = true;
-          console.log(`Pipeline success with model: ${modelName}`);
         } catch (err: any) {
-          const errMsg = err.message || "Unknown error";
-          errors.push(`[${modelName}]: ${errMsg}`);
-          console.warn(`Model ${modelName} failed:`, errMsg);
+          errors.push(`[${modelName}]: ${err.message}`);
         }
       }
 
-      if (!success) {
-        if (ENV_HF_KEY) {
-          console.warn("Gemini limit reached. Automatically falling back to HuggingFace Router...");
-          try {
-            const hfResponse = await axios.post(
-              "https://router.huggingface.co/v1/chat/completions",
-              {
-                model: "meta-llama/Llama-3.1-8B-Instruct",
-                messages: [{ role: "user", content: medicalPrompt }],
-                max_tokens: 1000,
-                temperature: 0.1
-              },
-              { headers: { Authorization: `Bearer ${ENV_HF_KEY}`, "Content-Type": "application/json" } }
-            );
-            text = hfResponse.data.choices[0]?.message?.content || "";
-            success = true;
-          } catch (hfErr: any) {
-            const msg = hfErr.response?.data?.error || hfErr.message || "Unknown error";
-            errors.push(`[HuggingFace Router]: ${msg}`);
-          }
+      if (!success && ENV_HF_KEY) {
+        console.warn("Falling back to HF for final report...");
+        try {
+          const hfResponse = await axios.post(
+            "https://router.huggingface.co/v1/chat/completions",
+            {
+              model: "meta-llama/Llama-3.1-8B-Instruct",
+              messages: [{ role: "user", content: medicalPrompt }],
+              max_tokens: 1000,
+              temperature: 0.1
+            },
+            { headers: { Authorization: `Bearer ${ENV_HF_KEY}`, "Content-Type": "application/json" } }
+          );
+          text = hfResponse.data.choices[0]?.message?.content || "";
+          success = true;
+        } catch (hfErr: any) {
+          errors.push(`[HuggingFace Router]: ${hfErr.message}`);
         }
       }
 
-      if (!success) {
-        throw new Error(`All Gemini models failed. \n${errors.join('\n')}`);
-      }
+      if (!success) throw new Error(errors.join('\n'));
 
       text = text.replace(/```json|```/g, '').trim();
       setClinicalAgent({ status: 'completed', data: text });
 
     } catch (error: any) {
       console.error("Pipeline Final Error:", error);
-      setClinicalAgent({
-        status: 'error',
-        data: null,
-        error: error.message || 'Pipeline failed'
-      });
+      setClinicalAgent({ status: 'error', data: null, error: error.message });
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const resetChat = () => {
+    setChatHistory([]);
+    setIsIntakeComplete(false);
+    setClinicalAgent({ status: 'idle', data: null });
+    setIntakeAgent({ status: 'idle', data: null });
   };
 
   // Helper to convert float32 AudioBuffer to 16-bit PCM WAV (Sarvam requirement)
@@ -434,6 +515,55 @@ const App: React.FC = () => {
           </h2>
 
           <div className="input-group">
+            <label>AI Intake Assistant</label>
+            <div className="chat-container" style={{
+              height: '300px',
+              background: 'rgba(0,0,0,0.2)',
+              borderRadius: '12px',
+              padding: '1rem',
+              overflowY: 'auto',
+              marginBottom: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}>
+              {chatHistory.length === 0 && <p style={{ opacity: 0.4, textAlign: 'center', marginTop: '40%' }}>Start speaking to begin the checkup...</p>}
+              {chatHistory.map((chat, idx) => (
+                <div key={idx} style={{
+                  alignSelf: chat.role === 'user' ? 'flex-end' : 'flex-start',
+                  background: chat.role === 'user' ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
+                  padding: '8px 12px',
+                  borderRadius: '12px',
+                  maxWidth: '85%',
+                  fontSize: '0.9rem',
+                  color: 'white',
+                  border: chat.role === 'model' ? '1px solid rgba(255,255,255,0.1)' : 'none'
+                }}>
+                  {chat.content}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '1rem' }}>
+              <button
+                className="button"
+                style={{ flex: 1, position: 'relative' }}
+                onClick={resetChat}
+              >
+                Reset Chat
+              </button>
+              {isIntakeComplete && (
+                <button
+                  className="button"
+                  style={{ flex: 1, background: 'var(--accent)' }}
+                  onClick={processIntelligencePipeline}
+                  disabled={isProcessing}
+                >
+                  Generate Report
+                </button>
+              )}
+            </div>
+
             <label>Communication Language</label>
             <select value={language} onChange={(e) => setLanguage(e.target.value)}>
               <option value="en">English</option>
@@ -512,27 +642,14 @@ const App: React.FC = () => {
                   />
                 )}
                 <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                  {sttStatus === 'processing' ? <div className="loader" style={{ width: '14px', height: '14px' }}></div> : isRecording ? <Square size={18} /> : <Mic size={18} />}
-                  {sttStatus === 'processing' ? "Processing..." : isRecording ? "Stop Recording" : "Start Intake"}
+                  {isSpeaking ? <Volume2 size={18} className="pulse" /> : sttStatus === 'processing' ? <div className="loader" style={{ width: '14px', height: '14px' }}></div> : isRecording ? <Square size={18} /> : <Mic size={18} />}
+                  {isSpeaking ? "AI is speaking..." : sttStatus === 'processing' ? "Processing..." : isRecording ? "Stop Recording" : "Speak to Assistant"}
                 </div>
               </button>
             </div>
-            <textarea
-              rows={4}
-              placeholder="Transcript will appear here..."
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-            />
           </div>
 
-          <button
-            className="button"
-            onClick={processIntelligencePipeline}
-            disabled={isProcessing || !inputText}
-            style={{ marginTop: 'auto' }}
-          >
-            {isProcessing ? <div className="loader"></div> : <><Sparkles size={18} /> Run Pipeline</>}
-          </button>
+
         </motion.section>
 
         {/* Intelligence Pipeline Panel */}
@@ -549,11 +666,21 @@ const App: React.FC = () => {
 
           <div className="agent-step active">
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <span className="badge badge-primary">Translation (HF/Sarvam)</span>
+              <span className="badge" style={{ background: 'var(--accent)' }}>Intake AI (Conversational)</span>
+              <StatusBadge status={intakeAgent.status} />
+            </div>
+            <div className="output-area" style={{ height: '60px', marginBottom: '1rem' }}>
+              {intakeAgent.data || "Assistant is listening..."}
+            </div>
+          </div>
+
+          <div className="agent-step active">
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+              <span className="badge badge-primary">Context Translation</span>
               <StatusBadge status={translationAgent.status} />
             </div>
-            <div className="output-area" style={{ height: '80px', marginBottom: '1rem' }}>
-              {translationAgent.data || "Waiting for processing..."}
+            <div className="output-area" style={{ height: '60px', marginBottom: '1rem' }}>
+              {translationAgent.data || "Waiting for intake completeness..."}
             </div>
           </div>
 
