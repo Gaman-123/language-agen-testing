@@ -112,11 +112,17 @@ const App: React.FC = () => {
           try {
             const sourceLangName = roleAtTime === 'doctor' ? 'English' : (langNameMap[patientLanguage] || patientLanguage);
             const targetLangName = roleAtTime === 'doctor' ? (langNameMap[patientLanguage] || patientLanguage) : 'English';
-            const translatePrompt = `Translate the following ${sourceLangName} text to ${targetLangName}. Reply with ONLY the translated text, no explanations.\n\nText: ${transcript}`;
+            const translatePrompt = `Translate the following ${sourceLangName} text to ${targetLangName}.
+IMPORTANT RULES:
+- Keep ALL medical terms exactly as-is in English: medicine names, drug names, dosages (mg, ml), frequencies (1-0-1, OD, BD, TDS), medical conditions, disease names, and medical abbreviations.
+- Only translate the conversational/descriptive parts of the sentence.
+- Reply with ONLY the translated text, no explanations, no quotes.
+
+Text: ${transcript}`;
             const hfRes = await axios.post('https://router.huggingface.co/v1/chat/completions', {
-              model: 'meta-llama/Llama-3.1-8B-Instruct',
+              model: 'meta-llama/Llama-3.3-70B-Instruct',
               messages: [{ role: 'user', content: translatePrompt }],
-              max_tokens: 300, temperature: 0.1
+              max_tokens: 400, temperature: 0.1
             }, { headers: { Authorization: `Bearer ${ENV_HF_KEY}`, 'Content-Type': 'application/json' } });
             translation = hfRes.data.choices?.[0]?.message?.content?.trim() || '';
           } catch (tErr: any) {
@@ -138,100 +144,72 @@ const App: React.FC = () => {
     }
   };
 
+  const sarvamLangMap: Record<string, string> = {
+    'tcy': 'kn-IN', 'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN',
+    'kn': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN',
+    'mr': 'mr-IN', 'pa': 'pa-IN', 'en': 'en-IN'
+  };
+
   const callSarvamTTS = async (text: string, langCode: string) => {
     if (!text) return;
-
-    // Language maps
-    const sarvamLangMap: Record<string, string> = {
-      'tcy': 'kn-IN', 'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN',
-      'kn': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN',
-      'mr': 'mr-IN', 'pa': 'pa-IN', 'en': 'en-IN'
-    };
-    const googleLangMap: Record<string, string> = {
-      'tcy': 'kn', 'hi': 'hi', 'ta': 'ta', 'te': 'te',
-      'kn': 'kn', 'ml': 'ml', 'bn': 'bn', 'gu': 'gu',
-      'mr': 'mr', 'pa': 'pa', 'en': 'en',
-      'hi-IN': 'hi', 'ta-IN': 'ta', 'te-IN': 'te', 'kn-IN': 'kn'
-    };
-
-    const sarvamTarget = sarvamLangMap[langCode] || 'en-IN';
-    const googleLang = googleLangMap[langCode] || 'en';
-
     setIsSpeaking(true);
 
-    // ── Layer 1: Sarvam AI TTS ──
+    const sarvamTarget = sarvamLangMap[langCode] || 'en-IN';
+
+    // ── Layer 1: Sarvam AI TTS for ALL Indian languages ──
     if (ENV_SARVAM_KEY) {
       try {
-        const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
+        // Build request with ALL required Sarvam fields
+        const body: any = {
           inputs: [text.slice(0, 500)],
           target_language_code: sarvamTarget,
-          speaker: 'meera',
-          model: 'bulbul:v1'
-        }, { headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' } });
+          model: 'bulbul:v2',
+          pitch: 0,
+          pace: 1.0,
+          loudness: 1.5,
+          speech_sample_rate: 16000,
+          enable_preprocessing: false
+        };
+        // 'anushka' is a valid female speaker for bulbul:v2 across all languages
+        body.speaker = 'anushka';
+
+        const res = await axios.post(
+          'https://api.sarvam.ai/text-to-speech',
+          body,
+          { headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' } }
+        );
 
         if (res.data?.audios?.[0]) {
           const audio = new Audio(`data:audio/wav;base64,${res.data.audios[0]}`);
           audio.onended = () => setIsSpeaking(false);
-          audio.onerror = () => googleTTS(text, googleLang);
+          audio.onerror = () => browserTTS(text, sarvamTarget);
           await audio.play();
           return;
         }
-      } catch (err) {
-        console.warn('Sarvam TTS failed, trying Google fallback...');
+      } catch (err: any) {
+        const errDetail = err?.response?.data ? JSON.stringify(err.response.data) : err.message;
+        console.warn('Sarvam TTS failed:', errDetail, '→ browser fallback');
       }
     }
 
-    // ── Layer 2: Google Translate TTS ──
-    googleTTS(text, googleLang);
-  };
-
-  const googleTTS = (text: string, googleLang: string) => {
-    try {
-      // Corrected regex to NOT skip newlines: [\s\S] instead of .
-      // Also split by sentences/newlines first for better natural pausing
-      const chunks = text.match(/[\s\S]{1,200}/g) || [text];
-      let idx = 0;
-
-      const playNext = () => {
-        if (idx >= chunks.length) {
-          setIsSpeaking(false);
-          return;
-        }
-        const chunk = encodeURIComponent(chunks[idx++].trim());
-        if (!chunk) { playNext(); return; } // skip empty chunks
-
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${chunk}&tl=${googleLang}&client=tw-ob`;
-        const audio = new Audio(url);
-        audio.onended = playNext;
-        audio.onerror = () => browserTTS(text, googleLang);
-        audio.play().catch(() => browserTTS(text, googleLang));
-      };
-
-      setIsSpeaking(true); // Ensure pulse stays on for fallback
-      playNext();
-    } catch {
-      browserTTS(text, googleLang);
-    }
+    // ── Layer 2: Browser SpeechSynthesis with smart voice selection ──
+    browserTTS(text, sarvamTarget);
   };
 
   const browserTTS = (text: string, lang: string) => {
-    if (!window.speechSynthesis) {
-      setIsSpeaking(false);
-      return;
-    }
+    if (!window.speechSynthesis) { setIsSpeaking(false); return; }
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
-    // Use slightly better language matching for browser voices
-    const browserLang = lang === 'kn' ? 'kn-IN' : (lang.includes('-') ? lang : `${lang}-IN`);
-    utter.lang = browserLang;
+    const shortLang = lang.replace('-IN', '').toLowerCase();
+    utter.lang = shortLang.length <= 3 ? `${shortLang}-IN` : lang;
     utter.rate = 0.95;
     utter.onstart = () => setIsSpeaking(true);
     utter.onend = () => setIsSpeaking(false);
     utter.onerror = () => setIsSpeaking(false);
-
     setIsSpeaking(true);
     window.speechSynthesis.speak(utter);
   };
+
 
 
 
@@ -420,7 +398,7 @@ const App: React.FC = () => {
               {sttStatus === 'processing' ? `Transcribing ${activeRole}...` : clinicalAgent.status === 'idle' ? 'Idle — run a consultation first.' : ''}
             </div>
           </div>
-          <ClinicalReportDisplay data={clinicalAgent.data} onSpeakSuggestion={(q) => callSarvamTTS(q, patientLanguage)} />
+          <ClinicalReportDisplay data={clinicalAgent.data} onSpeakSuggestion={(q) => callSarvamTTS(q, patientLanguage)} patientLanguage={patientLanguage} hfKey={ENV_HF_KEY} onSpeakInPatientLang={(text) => callSarvamTTS(text, patientLanguage)} />
         </section>
       </main>
     </div>
@@ -428,7 +406,13 @@ const App: React.FC = () => {
 };
 
 /* ── Editable Clinical Report Display ── */
-const ClinicalReportDisplay: React.FC<{ data: any; onSpeakSuggestion: (q: string) => void }> = ({ data, onSpeakSuggestion }) => {
+const ClinicalReportDisplay: React.FC<{
+  data: any;
+  onSpeakSuggestion: (q: string) => void;
+  patientLanguage: string;
+  hfKey: string;
+  onSpeakInPatientLang: (text: string) => void;
+}> = ({ data, onSpeakSuggestion, patientLanguage, hfKey, onSpeakInPatientLang }) => {
   const [finalized, setFinalized] = useState(false);
   const [rx, setRx] = useState<EditableRx | null>(null);
   const [json, setJson] = useState<any>(null);
@@ -525,14 +509,42 @@ const ClinicalReportDisplay: React.FC<{ data: any; onSpeakSuggestion: (q: string
             <span style={{ color: 'var(--accent)', fontSize: '12px', fontWeight: 700 }}><Lock size={12} style={{ marginRight: 5 }} />Finalized Prescription</span>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
-                onClick={() => {
-                  const rxText = `Diagnosis: ${rx.diagnosis}. Medicines: ${rx.prescription.map(p => `${p.medicine}, ${p.dose}, ${p.frequency}, for ${p.duration}`).join('. ')}. ${rx.advice ? 'Advice: ' + rx.advice + '.' : ''} ${rx.follow_up ? 'Follow up: ' + rx.follow_up : ''}`;
-                  onSpeakSuggestion(rxText);
+                onClick={async () => {
+                  // Build English prescription text (keep medicine names in English)
+                  const rxEnglish = `Your diagnosis is ${rx.diagnosis}. ${rx.prescription.map(p => `Take ${p.medicine} ${p.dose} ${p.frequency} for ${p.duration}`).join('. ')}. ${rx.advice ? 'Advice: ' + rx.advice + '.' : ''} ${rx.follow_up ? 'Please follow up ' + rx.follow_up + '.' : ''}`;
+
+                  // Translate to patient's language via HF (keeping medicine names in English)
+                  let spokenText = rxEnglish;
+                  if (hfKey) {
+                    const langNameMap: Record<string, string> = {
+                      'hi': 'Hindi', 'ta': 'Tamil', 'te': 'Telugu', 'kn': 'Kannada',
+                      'tcy': 'Tulu', 'bn': 'Bengali', 'ml': 'Malayalam', 'gu': 'Gujarati',
+                      'mr': 'Marathi', 'pa': 'Punjabi', 'en': 'English'
+                    };
+                    const targetLang = langNameMap[patientLanguage] || patientLanguage;
+                    if (targetLang !== 'English') {
+                      try {
+                        const prompt = `Translate the following English prescription instructions to ${targetLang} for the patient to understand.
+IMPORTANT: Keep ALL medicine names, dosages (mg, ml), and frequency codes (OD, BD, TDS, 1-0-1) in English exactly as written.
+Only translate the surrounding instructions and advice.
+Reply with ONLY the translated text.
+
+Text: ${rxEnglish}`;
+                        const res = await axios.post('https://router.huggingface.co/v1/chat/completions', {
+                          model: 'meta-llama/Llama-3.1-8B-Instruct',
+                          messages: [{ role: 'user', content: prompt }],
+                          max_tokens: 400, temperature: 0.1
+                        }, { headers: { Authorization: `Bearer ${hfKey}`, 'Content-Type': 'application/json' } });
+                        spokenText = res.data.choices?.[0]?.message?.content?.trim() || rxEnglish;
+                      } catch (e) { console.warn('Rx translation failed, speaking in English'); }
+                    }
+                  }
+                  onSpeakInPatientLang(spokenText);
                 }}
-                title="Read prescription aloud"
+                title="Read prescription to patient in their language"
                 style={{ background: 'rgba(78,205,196,0.1)', border: '1px solid rgba(78,205,196,0.3)', borderRadius: '6px', color: 'var(--accent)', cursor: 'pointer', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
               >
-                <Volume2 size={13} /> Read
+                <Volume2 size={13} /> Read to Patient
               </button>
               <button onClick={() => setFinalized(false)} style={{ fontSize: '11px', background: 'none', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '6px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', padding: '2px 10px' }}>Edit</button>
             </div>
