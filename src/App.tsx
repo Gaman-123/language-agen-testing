@@ -140,20 +140,31 @@ const App: React.FC = () => {
 
   const callSarvamTTS = async (text: string, langCode: string) => {
     if (!text) return;
-    const ttsLangMap: Record<string, string> = {
+
+    // Language maps
+    const sarvamLangMap: Record<string, string> = {
       'tcy': 'kn-IN', 'hi': 'hi-IN', 'ta': 'ta-IN', 'te': 'te-IN',
       'kn': 'kn-IN', 'ml': 'ml-IN', 'bn': 'bn-IN', 'gu': 'gu-IN',
       'mr': 'mr-IN', 'pa': 'pa-IN', 'en': 'en-IN'
     };
-    const targetLang = ttsLangMap[langCode] || 'en-IN';
+    const googleLangMap: Record<string, string> = {
+      'tcy': 'kn', 'hi': 'hi', 'ta': 'ta', 'te': 'te',
+      'kn': 'kn', 'ml': 'ml', 'bn': 'bn', 'gu': 'gu',
+      'mr': 'mr', 'pa': 'pa', 'en': 'en',
+      'hi-IN': 'hi', 'ta-IN': 'ta', 'te-IN': 'te', 'kn-IN': 'kn'
+    };
 
-    // Try Sarvam TTS first
+    const sarvamTarget = sarvamLangMap[langCode] || 'en-IN';
+    const googleLang = googleLangMap[langCode] || 'en';
+
+    setIsSpeaking(true);
+
+    // ── Layer 1: Sarvam AI TTS ──
     if (ENV_SARVAM_KEY) {
       try {
-        setIsSpeaking(true);
         const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
-          inputs: [text.slice(0, 500)], // Sarvam has a char limit
-          target_language_code: targetLang,
+          inputs: [text.slice(0, 500)],
+          target_language_code: sarvamTarget,
           speaker: 'meera',
           model: 'bulbul:v1'
         }, { headers: { 'api-subscription-key': ENV_SARVAM_KEY, 'Content-Type': 'application/json' } });
@@ -161,31 +172,68 @@ const App: React.FC = () => {
         if (res.data?.audios?.[0]) {
           const audio = new Audio(`data:audio/wav;base64,${res.data.audios[0]}`);
           audio.onended = () => setIsSpeaking(false);
-          audio.onerror = () => { setIsSpeaking(false); browserTTS(text, targetLang); };
+          audio.onerror = () => googleTTS(text, googleLang);
           await audio.play();
           return;
         }
-      } catch (err: any) {
-        console.warn('Sarvam TTS failed, falling back to browser TTS:', err?.response?.data || err.message);
+      } catch (err) {
+        console.warn('Sarvam TTS failed, trying Google fallback...');
       }
     }
 
-    // Fallback: Browser Web Speech API
-    browserTTS(text, targetLang);
+    // ── Layer 2: Google Translate TTS ──
+    googleTTS(text, googleLang);
   };
 
-  const browserTTS = (text: string, bcp47Lang: string) => {
-    if (!window.speechSynthesis) return;
+  const googleTTS = (text: string, googleLang: string) => {
+    try {
+      // Corrected regex to NOT skip newlines: [\s\S] instead of .
+      // Also split by sentences/newlines first for better natural pausing
+      const chunks = text.match(/[\s\S]{1,200}/g) || [text];
+      let idx = 0;
+
+      const playNext = () => {
+        if (idx >= chunks.length) {
+          setIsSpeaking(false);
+          return;
+        }
+        const chunk = encodeURIComponent(chunks[idx++].trim());
+        if (!chunk) { playNext(); return; } // skip empty chunks
+
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${chunk}&tl=${googleLang}&client=tw-ob`;
+        const audio = new Audio(url);
+        audio.onended = playNext;
+        audio.onerror = () => browserTTS(text, googleLang);
+        audio.play().catch(() => browserTTS(text, googleLang));
+      };
+
+      setIsSpeaking(true); // Ensure pulse stays on for fallback
+      playNext();
+    } catch {
+      browserTTS(text, googleLang);
+    }
+  };
+
+  const browserTTS = (text: string, lang: string) => {
+    if (!window.speechSynthesis) {
+      setIsSpeaking(false);
+      return;
+    }
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
-    // Map BCP-47 like 'kn-IN' to browser lang code
-    utter.lang = bcp47Lang;
-    utter.rate = 0.9;
+    // Use slightly better language matching for browser voices
+    const browserLang = lang === 'kn' ? 'kn-IN' : (lang.includes('-') ? lang : `${lang}-IN`);
+    utter.lang = browserLang;
+    utter.rate = 0.95;
     utter.onstart = () => setIsSpeaking(true);
     utter.onend = () => setIsSpeaking(false);
     utter.onerror = () => setIsSpeaking(false);
+
+    setIsSpeaking(true);
     window.speechSynthesis.speak(utter);
   };
+
+
 
   const processIntelligencePipeline = async () => {
     if (!chatHistory.length || !ENV_GEMINI_KEY) return alert("No history or API key missing");
