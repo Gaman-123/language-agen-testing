@@ -1,53 +1,65 @@
-# Spot Medicine AI 🩺🤖
+# 🏥 Spot Medicine AI
 
-Spot Medicine AI is a high-performance clinical intelligence dashboard designed to streamline patient intake and structured medical record generation. It leverages state-of-the-art AI models to process multilingual speech, translate regional Indian languages, and generate professional JSON-structured medical reports.
+Spot Medicine AI is an advanced clinical consultation assistant designed to bridge language barriers between doctors and patients in India. It leverages multi-model AI to provide real-time translation, automated intake auditing, and editable digital prescriptions.
 
-## ✨ Key Features
+## 🚀 Key Features
 
-- **Multilingual Audio Intake**: High-fidelity audio recording with real-time volume visualization.
-- **AI-Powered Speech-to-Text**: Integrated with **Sarvam AI (Saaras-v3)** for high-accuracy transcription of Indian regional languages.
-- **Robust Translation Layer**: Automatically translates Tulu, Hindi, Tamil, and Kannada into clinical English using **Sarvam's Mayura-v1**.
-- **Resilient Intelligence Pipeline**: 
-  - Primary processing via **Google Gemini (2.5-Flash/Pro)**.
-  - **AI Prescription Generation**: Automatically drafts a structured medical prescription (Diagnosis, Medications, Advice, Warnings) in JSON format for doctor verification.
-  - **Automatic Fallback**: If Gemini rate limits are hit (common on Free Tier), the app silently switches to **Hugging Face Router (Llama-3.1)** to finish the report and prescription.
+### 🎙️ Dual Microphone Consultation
+- **Hybrid Input**: Separate controls for Doctor (English) and Patient (Regional languages).
+- **Real-Time Transcription**: High-accuracy speech-to-text powered by Sarvam AI (`saaras:v3`).
+- **Visual Feedback**: Pulsing microphone animations and live transcription status indicators.
 
-## 🔑 How the API Keys Work
+### 🌐 Real-Time Translation
+- **Seamless Communication**: Automatic translation between English and 10+ Indian languages after every recording.
+- **Language Support**: Hindi, Tamil, Telugu, Kannada, **Tulu**, Bengali, Malayalam, Gujarati, Marathi, and Punjabi.
+- **LLM-Powered**: Translation logic handled by **HF Llama 3.1** via HuggingFace Router for high contextual accuracy.
 
-The application requires three distinct API keys to handle the different stages of the medical pipeline. These must be stored in a `.env` file at the root of the project:
+### 🔊 Deep Voice Integration (3-Layer TTS)
+Audio readout works for all supported languages using a robust fallback chain:
+1.  **Sarvam AI**: Premium natural Indian voices (Meera).
+2.  **Google Translate TTS**: Reliable fallback covering all Indian languages and Tulu.
+3.  **Browser Web Speech**: Indigenous hardware fallback for major languages.
+- **Auto-Speak**: Automatically reads translations to the other party during live consultation.
+- **Interactive Speakers**: Individual 🔊 buttons for every chat segment and clinical suggestion.
 
-1.  **`VITE_SARVAM_API_KEY`**: 
-    - **Purpose**: Handles all Speech-to-Text (transcribing your voice) and Initial Translation (converting Tulu/Hindi to English).
-    - **Get it from**: [Sarvam AI Dashboard](https://dashboard.sarvam.ai/).
-2.  **`VITE_GEMINI_API_KEY`**: 
-    - **Purpose**: Powering the "Intelligence" layer. It reads the English transcript to structure both the clinical record and the doctor's draft prescription.
-    - **Get it from**: [Google AI Studio](https://aistudio.google.com/).
-3.  **`VITE_HF_API_KEY`**: 
-    - **Purpose**: The "Safety Net." If Gemini blocks your request, this key allows the app to use Hugging Face's open-source models to complete both the clinical record and the prescription without error.
-    - **Get it from**: [Hugging Face Settings](https://huggingface.co/settings/tokens). Ensure the token has "Inference" permissions.
+### 🧠 AI Clinical Intake Auditor
+- **7-Point Framework Audit**: Automatically checks consultations for:
+    - Chief Complaint
+    - Duration
+    - Severity
+    - Associated Symptoms
+    - Medical History
+    - Allergies (Highlighted ⚠️)
+    - Current Medications
+- **Gap Identification**: Displays a status board of missing clinical points.
+- **Proactive Guidance**: Suggests specific follow-up questions for the doctor to ensure a complete medical record.
 
-## 🛠️ Setup Instructions
+### 📋 Doctor-Editable Digital Prescription
+- **AI Structured Report**: Parses consultation audio into a structured JSON medical report (via Gemini 2.0 Flash / Llama 3.1).
+- **Interactive Editor**:
+    - Editable **Diagnosis**, **Advice**, and **Follow-up** fields.
+    - Full control over the **Prescription Table** (Generic medicine names, Dose, Frequency, Duration).
+    - Add/Remove medicine rows with a single click.
+- **Finalization & Audit**: Lock the prescription into a professional, read-only "Finalized" format.
+- **Read Prescription**: A dedicated 🔊 **Read** button in the finalized view reads out the entire diagnosis and treatment plan aloud.
 
-1.  **Clone the project** and install dependencies:
-    ```bash
-    npm install
-    ```
+## 🛠️ Technology Stack
+- **Frontend**: React, TypeScript, Framer Motion, Lucide Icons.
+- **Intelligence**: Google Gemini 2.0 Flash, Meta Llama 3.1 (via HF Router).
+- **Speech**: Sarvam AI (STT/TTS), Google TTS Fallback, Browser Speech API.
+- **Communication**: Axios.
 
-2.  **Configure Environment Variables**:
-    Create a `.env` file in the root:
-    ```env
-    VITE_GEMINI_API_KEY=your_gemini_key
-    VITE_SARVAM_API_KEY=your_sarvam_key
-    VITE_HF_API_KEY=your_huggingface_key
-    ```
+## 🔑 Environment Variables
+The application requires the following keys in a `.env` file:
+```env
+VITE_GEMINI_API_KEY=your_gemini_key
+VITE_SARVAM_API_KEY=your_sarvam_key
+VITE_HF_API_KEY=your_huggingface_key
+```
 
-3.  **Run Development Server**:
-    ```bash
-    npm run dev
-    ```
-
-## 📋 Note on Tulu Support
-For Tulu intake, selecting "Tulu" in the UI tells the system to use the Kannada script model (`kn-IN`) on Sarvam's backend, as Tulu utilizes the same script. This ensures the highest possible translation accuracy into English.
-
-## ⚖️ License
-MIT
+## 📜 Usage
+1. Use the **Doctor (EN)** and **Patient (Lang)** microphones to record the consultation.
+2. Monitor the **Translation** appearing in real-time.
+3. Click **"Check Completeness & Generate Rx"** to audit the consultation and create the draft report.
+4. Edit the fields in the **Clinical Report** as needed.
+5. Click **"Finalize Prescription"** to produce the final treatment plan.
